@@ -1,0 +1,23 @@
+{
+  "name": "taiwan-night-market-pinball",
+  "version": "1.0.0",
+  "description": "B.B.MAN style Taiwanese night-market pinball in the browser",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node test/run.js",
+    "test:ux": "node test/ux-check.js",
+    "test:offline": "node test/offline-check.js",
+    "serve": "node serve.mjs 8181",
+    "build": "node build-singlefile.mjs"
+  },
+  "keywords": [],
+  "type": "module",
+  "devDependencies": {
+    "cannon-es": "^0.20.0",
+    "esbuild": "^0.28.2",
+    "puppeteer": "^25.11.0",
+    "three": "^0.160.0"
+  }
+}

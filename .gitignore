@@ -1,0 +1,14 @@
+
+# build intermediates (root game.html IS committed — 單檔雙擊即玩版)
+dist/
+
+# deps
+node_modules/
+
+# test screenshots (regenerable via npm test)
+test/*.png
+
+# local tooling
+.mimocode/
+.omo/
+.codegraph
