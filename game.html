@@ -179,6 +179,7 @@ html, body {
 }
 
 .score-readout { min-width: 126px; }
+.score-note { margin: 4px 0 0; color: #b9a684; font-size: 10px; }
 .score-readout .value {
   color: #79e8ff;
   font-size: 23px;
@@ -640,6 +641,7 @@ kbd {
   .readout .label { font-size: 8px; }
   .readout .value { font-size: 19px; }
   .score-readout { min-width: 92px; }
+  .score-note { font-size: 8px; }
   .score-readout .value { font-size: 17px; }
   .status-row { margin-top: 6px; }
   .status { font-size: 12px; }
@@ -696,10 +698,11 @@ kbd {
           <span id="hud-base" class="value">20</span>
         </div>
         <div class="readout score-readout">
-          <span class="label">SCORE</span>
+          <span class="label">SCORE*</span>
           <span id="hud-score" class="value">0</span>
         </div>
       </div>
+      <p class="score-note">*瀏覽器設計抽象；實機贏回彈珠</p>
       <div class="status-row">
         <p id="hud-status" class="status" aria-live="polite">按「開始」抽目標</p>
       </div>
@@ -738,10 +741,10 @@ kbd {
 
     <div id="welcome" class="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
       <div class="welcome-card">
-        <div class="ticket-stub">每局 10 顆</div>
+        <div class="ticket-stub">每局 <span id="welcome-balls">10</span> 顆</div>
         <p class="welcome-kicker">正宗台味・全物理鋼珠</p>
         <h2 id="welcome-title">彈珠超人</h2>
-        <p class="welcome-copy">每次發射 1 顆彈珠，落入倍率洞就獲得分數。<br>先選基礎分數與本局彈珠數量！</p>
+        <p class="welcome-copy">每次發射 1 顆彈珠，落入倍率洞會獲得瀏覽器設計抽象的分數；實機則是命中指定紅燈球道贏回彈珠。<br>先選基礎分數與本局顆數！</p>
         <div class="setup-controls">
           <div><span>基礎分數</span><div class="choice-row" id="base-score-choices">
             <button type="button" data-base-score="10">10</button>
@@ -31532,6 +31535,7 @@ var BOARD = {
   wallThickness: 1.2
 };
 var TILT = 0.15;
+var GRAVITY = 981;
 var BALL = {
   radius: 0.62,
   mass: 1.1,
@@ -31545,13 +31549,49 @@ var BALL = {
   maxSpeed: 430,
   /** A ball slower than this for this many seconds is considered stuck. */
   stuckSpeed: 6,
-  stuckTime: 3
+  stuckTime: 3,
+  /** Extra distance beyond wall guards before position is considered truly out-of-bounds. */
+  outOfBoundsExtra: 5,
+  /** Time (s) a ball may survive on the board before the shot is forced to finish. */
+  maxSurvivalTime: 12,
+  /** Time (s) a ball may remain nearly stationary (below stuckSpeed) before recovery. */
+  stuckTimeout: 5,
+  /** Time (s) a ball may remain in continuous overlap before being relocated. */
+  continuousOverlapTime: 4
 };
 var PHYSICS = {
+  /** Fixed simulation slice (s). 240 Hz keeps a 430 cm/s ball under 2 cm/slice. */
   fixedStep: 1 / 240,
+  /** Hard cap on catch-up slices per rendered frame (spiral-of-death guard). */
   maxSubSteps: 24,
+  /** Solver precision while the machine runs comfortably. */
   solverIterations: 18,
-  solverTolerance: 15e-4
+  solverTolerance: 15e-4,
+  /**
+   * Wall-clock budget (ms) the physics scheduler may spend per frame. Slices it
+   * cannot finish stay in the accumulator for the next frame, so requestAnim-
+   * ationFrame rendering and input handling always get the rest of the frame.
+   * `Infinity` disables the budget (deterministic offline simulation).
+   */
+  budgetMs: 6,
+  /**
+   * Largest delta (s) fed into the accumulator in one frame. A tab that was
+   * backgrounded for seconds must not fast-forward the ball, so the excess is
+   * dropped rather than replayed. Equals `fixedStep * maxSubSteps`.
+   */
+  maxFrameDelta: 0.1,
+  /** Reduced-precision solver used when crowded or falling behind. */
+  reducedSolverIterations: 8,
+  reducedSolverTolerance: 4e-3,
+  /** Dynamic bodies at which precision is reduced (covers multi-ball play). */
+  crowdThreshold: 6,
+  /**
+   * Average physics cost (ms/frame) above which precision is reduced before the
+   * wall-clock budget is actually exhausted. Defaults to 80% of `budgetMs`.
+   */
+  slowCostMs: 4.8,
+  /** How long (ms) to stay at reduced precision after falling behind. */
+  degradedHoldMs: 900
 };
 var BASE_SCORE_OPTIONS = [10, 20, 50, 100];
 var SHOT_BATCH_OPTIONS = [5, 10, 20];
@@ -41734,27 +41774,27 @@ function createWorld() {
   return world;
 }
 function tiltedGravity(tilt) {
-  const g = BALL.mass ? 981 : 981;
-  return new Vec3(0, -g * Math.cos(tilt), g * Math.sin(tilt));
+  return new Vec3(0, -GRAVITY * Math.cos(tilt), GRAVITY * Math.sin(tilt));
 }
-function stepWorld(world, frameDelta) {
-  const dt = Math.min(frameDelta, 0.05);
-  world.step(PHYSICS.fixedStep, dt, PHYSICS.maxSubSteps);
+function sanitizeBodies(world) {
+  for (const body of world.bodies) {
+    if (body.mass <= 0) continue;
+    if (!isFinite(body.position.x) || !isFinite(body.position.y) || !isFinite(body.position.z) || !isFinite(body.velocity.x) || !isFinite(body.velocity.y) || !isFinite(body.velocity.z)) {
+      body.position.set(0, 2, 0);
+      body.velocity.set(0, 0, 0);
+      body.angularVelocity.set(0, 0, 0);
+    }
+  }
 }
 function clampSpeed(body, max) {
   const v = body.velocity;
   const speedSq = v.lengthSquared();
   if (speedSq > max * max) {
-    const scale = max / Math.sqrt(speedSq);
+    const speed = Math.sqrt(Math.max(0, speedSq));
+    const scale = max / speed;
     v.scale(scale, v);
   }
 }
-var BOARD_LIMITS = {
-  /** Half-width of the playable floor. */
-  halfWidth: BOARD.width / 2,
-  /** Half-height (along z) of the playable floor. */
-  halfHeight: BOARD.height / 2
-};
 
 // src/layout.js
 function mulberry32(seed) {
@@ -42874,6 +42914,8 @@ var BallMethods = {
     mesh.visible = false;
     this.scene.add(mesh);
     this._ballQuat = new Quaternion();
+    this._ballPose = new cannon_es_exports.Vec3();
+    this._ballSpin = new cannon_es_exports.Quaternion();
     const body = new cannon_es_exports.Body({
       mass: BALL.mass,
       shape: new cannon_es_exports.Sphere(BALL.radius),
@@ -42943,11 +42985,26 @@ var BallMethods = {
    * position goes through the group's world matrix and the spin quaternion is
    * pre-multiplied by the board rotation. Rolling then looks correct on the
    * sloped board instead of spinning around a horizontal axis.
+   *
+   * @param {number} [alpha] how far into the newest fixed slice the world has
+   *   been simulated (0..1). The scheduler leaves the pre-slice pose in
+   *   `previousPosition` / `previousQuaternion`, so blending toward the current
+   *   pose keeps a frame that deferred physics visually smooth. `1` (the
+   *   default) snaps straight to the simulated pose.
    */
-  syncBall() {
+  syncBall(alpha = 1) {
     const b2 = this.ballBody;
-    this.ballMesh.position.copy(b2.position).applyMatrix4(this.group.matrixWorld);
-    this._ballQuat.set(b2.quaternion.x, b2.quaternion.y, b2.quaternion.z, b2.quaternion.w);
+    const pose = this._ballPose;
+    const spin = this._ballSpin;
+    if (alpha < 1) {
+      b2.previousPosition.lerp(b2.position, alpha, pose);
+      b2.previousQuaternion.slerp(b2.quaternion, alpha, spin);
+    } else {
+      pose.copy(b2.position);
+      spin.copy(b2.quaternion);
+    }
+    this.ballMesh.position.set(pose.x, pose.y, pose.z).applyMatrix4(this.group.matrixWorld);
+    this._ballQuat.set(spin.x, spin.y, spin.z, spin.w);
     this.ballMesh.quaternion.copy(this._ballQuat).premultiply(this._boardQuat);
   },
   /**
@@ -42994,12 +43051,14 @@ var DisplayMethods = {
   /**
    * Advance the machine's presentation to match the physics.
    * @param {number} dt seconds
+   * @param {number} [alpha] interpolation factor between the last two fixed
+   *   slices (0..1); passed straight through to `syncBall`.
    */
-  update(dt) {
+  update(dt, alpha = 1) {
     if (this.ballActive) {
       clampSpeed(this.ballBody, BALL.maxSpeed);
       this._guardBallInsideWalls();
-      this.syncBall();
+      this.syncBall(alpha);
     }
     this.ballMesh.visible = this.ballActive;
     if (this.startButtonMesh) {
@@ -43035,23 +43094,29 @@ var DisplayMethods = {
     let corrected = false;
     if (body.position.x < -xLimit) {
       body.position.x = -xLimit;
-      if (body.velocity.x < 0) body.velocity.x = Math.abs(body.velocity.x) * 0.42;
+      body.velocity.x = Math.max(-BALL.maxSpeed, Math.min(BALL.maxSpeed, body.velocity.x)) * 0.42;
       corrected = true;
     } else if (body.position.x > xLimit) {
       body.position.x = xLimit;
-      if (body.velocity.x > 0) body.velocity.x = -Math.abs(body.velocity.x) * 0.42;
+      body.velocity.x = Math.max(-BALL.maxSpeed, Math.min(BALL.maxSpeed, body.velocity.x)) * -0.42;
       corrected = true;
     }
     if (body.position.z < zMin) {
       body.position.z = zMin;
-      if (body.velocity.z < 0) body.velocity.z = Math.abs(body.velocity.z) * 0.42;
+      body.velocity.z = Math.max(-BALL.maxSpeed, Math.min(BALL.maxSpeed, body.velocity.z)) * 0.42;
       corrected = true;
     } else if (body.position.z > zMax) {
       body.position.z = zMax;
-      if (body.velocity.z > 0) body.velocity.z = -Math.abs(body.velocity.z) * 0.42;
+      body.velocity.z = Math.max(-BALL.maxSpeed, Math.min(BALL.maxSpeed, body.velocity.z)) * -0.42;
       corrected = true;
     }
     if (corrected) body.wakeUp();
+    if (!isFinite(body.position.x) || !isFinite(body.position.y) || !isFinite(body.position.z) || !isFinite(body.velocity.x) || !isFinite(body.velocity.y) || !isFinite(body.velocity.z)) {
+      body.position.set(0, 2, BOARD.height / 2);
+      body.velocity.set(0, 0, 0);
+      body.angularVelocity.set(0, 0, 0);
+      body.wakeUp();
+    }
   },
   /** Flash a bumper post white-hot for a moment when it is struck. */
   flashBumper(index) {
@@ -43125,6 +43190,183 @@ Object.assign(
   ButtonMethods,
   StandMethods
 );
+
+// src/loop.js
+var hasPerformance = typeof performance !== "undefined" && typeof performance.now === "function";
+var nowMs = () => hasPerformance ? performance.now() : Date.now();
+var SLEEPING = 2;
+var QUALITY = {
+  FULL: "full",
+  REDUCED: "reduced"
+};
+function buildTiers(cfg) {
+  return {
+    [QUALITY.FULL]: {
+      iterations: cfg.solverIterations,
+      tolerance: cfg.solverTolerance
+    },
+    [QUALITY.REDUCED]: {
+      iterations: cfg.reducedSolverIterations,
+      tolerance: cfg.reducedSolverTolerance
+    }
+  };
+}
+var FixedTimestepRunner = class {
+  /**
+   * @param {Partial<typeof PHYSICS>} [options] overrides (tests / tuning)
+   */
+  constructor(options = {}) {
+    const cfg = { ...PHYSICS, ...options };
+    this.fixedStep = cfg.fixedStep;
+    this.maxSubSteps = cfg.maxSubSteps;
+    this.budgetMs = cfg.budgetMs;
+    this.maxFrameDelta = Math.min(cfg.maxFrameDelta, cfg.fixedStep * cfg.maxSubSteps);
+    this.crowdThreshold = cfg.crowdThreshold;
+    this.slowCostMs = cfg.slowCostMs ?? cfg.budgetMs * 0.8;
+    this.degradedHoldMs = cfg.degradedHoldMs;
+    this.tiers = buildTiers(cfg);
+    this.maxAccumulator = this.fixedStep * this.maxSubSteps;
+    this.accumulator = 0;
+    this.alpha = 0;
+    this.quality = QUALITY.FULL;
+    this.simTime = 0;
+    this.droppedTime = 0;
+    this.costEma = 0;
+    this._holdMs = 0;
+    this._budgetHit = false;
+    this._dynamicBodies = 0;
+    this._applied = null;
+    this.report = this._emptyReport();
+  }
+  _emptyReport() {
+    return {
+      requested: 0,
+      clamped: 0,
+      renderDt: 0,
+      simulatedDt: 0,
+      steps: 0,
+      budgetExceeded: false,
+      catchUpCapped: false,
+      dropped: 0,
+      leftover: 0,
+      alpha: 0,
+      elapsedMs: 0,
+      quality: QUALITY.FULL,
+      dynamicBodies: 0
+    };
+  }
+  /** Forget any backlog and return to full precision (new game / new round). */
+  reset() {
+    this.accumulator = 0;
+    this.alpha = 0;
+    this.quality = QUALITY.FULL;
+    this.simTime = 0;
+    this.droppedTime = 0;
+    this.costEma = 0;
+    this._holdMs = 0;
+    this._budgetHit = false;
+    this._applied = null;
+  }
+  /**
+   * Advance the world by at most one frame worth of fixed slices.
+   *
+   * @param {import('cannon-es').World} world
+   * @param {number} frameDelta seconds since the previous frame
+   * @returns {object} telemetry for the caller
+   */
+  advance(world, frameDelta) {
+    const requested = Number.isFinite(frameDelta) && frameDelta > 0 ? frameDelta : 0;
+    const clamped = Math.min(requested, this.maxFrameDelta);
+    this.accumulator += clamped;
+    let dropped = 0;
+    if (this.accumulator > this.maxAccumulator) {
+      dropped = this.accumulator - this.maxAccumulator;
+      this.accumulator = this.maxAccumulator;
+      this.droppedTime += dropped;
+    }
+    this._selectQuality(world, clamped);
+    this._applyTier(world);
+    const started = nowMs();
+    let steps = 0;
+    let budgetExceeded = false;
+    while (this.accumulator >= this.fixedStep && steps < this.maxSubSteps) {
+      world.step(this.fixedStep);
+      this.accumulator -= this.fixedStep;
+      steps += 1;
+      if (steps < this.maxSubSteps && nowMs() - started >= this.budgetMs) {
+        budgetExceeded = true;
+        break;
+      }
+    }
+    const elapsedMs = nowMs() - started;
+    const catchUpCapped = this.accumulator >= this.fixedStep;
+    this.alpha = Math.min(1, Math.max(0, this.accumulator / this.fixedStep));
+    this.simTime += steps * this.fixedStep;
+    this._budgetHit = budgetExceeded || catchUpCapped;
+    this._trackCost(elapsedMs, steps);
+    this.report = {
+      requested,
+      clamped,
+      /** Wall-clock delta that presentation code may use. */
+      renderDt: clamped,
+      /** Simulated time actually covered by this call. */
+      simulatedDt: steps * this.fixedStep,
+      steps,
+      budgetExceeded,
+      catchUpCapped,
+      dropped,
+      leftover: this.accumulator,
+      alpha: this.alpha,
+      elapsedMs,
+      quality: this.quality,
+      dynamicBodies: this._dynamicBodies
+    };
+    return this.report;
+  }
+  /**
+   * Pick the solver precision for the slices we are about to run. Degrading is
+   * immediate; recovery waits out `degradedHoldMs` so the tier cannot oscillate.
+   */
+  _selectQuality(world, clamped) {
+    const dynamics = this._countDynamic(world);
+    this._dynamicBodies = dynamics;
+    this._holdMs = Math.max(0, this._holdMs - clamped * 1e3);
+    if (this._budgetHit) this._holdMs = this.degradedHoldMs;
+    this._budgetHit = false;
+    const crowded = dynamics >= this.crowdThreshold;
+    const slow = this.costEma > this.slowCostMs;
+    this.quality = crowded || slow || this._holdMs > 0 ? QUALITY.REDUCED : QUALITY.FULL;
+  }
+  /** Write the current tier into the solver, but only when it actually changed. */
+  _applyTier(world) {
+    const tier = this.tiers[this.quality];
+    if (!tier || !world || !world.solver || this._applied === tier) return;
+    world.solver.iterations = tier.iterations;
+    world.solver.tolerance = tier.tolerance;
+    this._applied = tier;
+  }
+  /** How many awake dynamic bodies the world currently owns. */
+  _countDynamic(world) {
+    const bodies = world && world.bodies;
+    if (!bodies) return 0;
+    let count = 0;
+    for (let i = 0; i < bodies.length; i += 1) {
+      const body = bodies[i];
+      if (body.mass > 0 && body.sleepState !== SLEEPING) count += 1;
+    }
+    return count;
+  }
+  /**
+   * Smooth the per-frame physics cost so one slow frame is not enough to
+   * degrade. The 0.3 decay lets a recovered board climb back under
+   * `slowCostMs` within a dozen frames (~200ms); a slower filter would keep
+   * the reduced tier latched long after the cost is gone.
+   */
+  _trackCost(elapsedMs, steps) {
+    if (steps === 0) return;
+    this.costEma = this.costEma === 0 ? elapsedMs : this.costEma * 0.7 + elapsedMs * 0.3;
+  }
+};
 
 // src/audio.js
 var MASTER_LEVEL = 0.32;
@@ -43303,7 +43545,7 @@ var STATE = {
   GAME_OVER: "GAME_OVER"
 };
 var SPIN_DURATION = 1.5;
-var DRAIN_TIMEOUT = 12;
+var DRAIN_TIMEOUT = BALL.maxSurvivalTime;
 var RESOLVE_DURATION = 1.15;
 var SCORE_STORAGE_KEY = "night-market-pinball-high-score";
 var Game = class {
@@ -43313,6 +43555,7 @@ var Game = class {
   constructor(machine2) {
     this.machine = machine2;
     this.ui = null;
+    this.stepper = new FixedTimestepRunner();
     this.reset();
     this._wire();
   }
@@ -43336,6 +43579,8 @@ var Game = class {
     this.hits = 0;
     this.score = 0;
     this.highestShot = 0;
+    this.ballsWon = 0;
+    this.targetHits = 0;
     this.history = [];
     this.multiplierStats = Object.fromEntries(HOLE_MULTIPLIERS.map((m) => [m, 0]));
     this.combo = 0;
@@ -43349,12 +43594,26 @@ var Game = class {
     this.stuckTime = 0;
     this.stillTimer = 0;
     this.lastTrackPos = null;
+    this.continuousOverlapPos = null;
+    this.continuousOverlapTimer = 0;
     this.recoveryTries = 0;
     this.shotCommitted = false;
     this.lastResult = null;
     this.pendingResult = null;
     this.state = STATE.READY;
     this.machine.ballActive = false;
+    const body = this.machine.ballBody;
+    body.position?.set(
+      this.machine.barrelX ?? LANE.channelX,
+      BALL.radius + 1.1,
+      LANE.loadZ + 2
+    );
+    body.velocity?.set(0, 0, 0);
+    body.angularVelocity?.set(0, 0, 0);
+    body.force?.set(0, 0, 0);
+    body.torque?.set(0, 0, 0);
+    body.wakeUp?.();
+    this.stepper.reset();
     this.machine.clearLeds();
     this.machine.clearLaneLeds?.();
     this.machine.setReadout(this.balls, null);
@@ -43466,6 +43725,8 @@ var Game = class {
     this.stuckTime = 0;
     this.stillTimer = 0;
     this.lastTrackPos = null;
+    this.continuousOverlapPos = null;
+    this.continuousOverlapTimer = 0;
     this.recoveryTries = 0;
     this.shotCommitted = false;
     this.pendingResult = null;
@@ -43479,22 +43740,31 @@ var Game = class {
   }
   // -------------------------------------------------------------- per-frame
   /**
+   * One rendered frame.
+   *
+   * The physics world is advanced by `game.stepper`, which never spends more
+   * than its wall-clock budget and never chases more than `maxSubSteps` fixed
+   * slices. Whatever did not fit is deferred, so this method always returns
+   * promptly and the caller can render + service input.
+   *
    * @param {number} frameDelta seconds since the previous frame
+   * @returns {object} the scheduler telemetry for this frame (see src/loop.js)
    */
   update(frameDelta) {
+    sanitizeBodies(this.machine.world);
+    const step = this.stepper.advance(this.machine.world, frameDelta);
+    const renderDt = step.renderDt;
+    const physicsDt = step.simulatedDt;
     if (this.state === STATE.SPINNING) {
-      this._updateSpin(frameDelta);
-      stepWorld(this.machine.world, frameDelta);
-      this.machine.update(frameDelta);
-      return;
+      this._updateSpin(renderDt);
     }
-    stepWorld(this.machine.world, frameDelta);
-    this.machine.update(frameDelta);
+    this.machine.update(renderDt, this.stepper.alpha);
     if (this.state === STATE.IN_PLAY) {
-      this._trackBall(frameDelta);
+      this._trackBall(physicsDt);
     } else if (this.state === STATE.RESOLVING) {
-      this._tickResolve(frameDelta);
+      this._tickResolve(renderDt);
     }
+    return step;
   }
   /**
    * Watch the ball while it is on the board: detect a pocket entry, or decide
@@ -43503,8 +43773,40 @@ var Game = class {
   _trackBall(dt) {
     const ball = this.machine.ballBody;
     this.ballTimer += dt;
-    const p = ball.position;
+    if (!isFinite(ball.position.x) || !isFinite(ball.position.y) || !isFinite(ball.position.z) || !isFinite(ball.velocity.x) || !isFinite(ball.velocity.y) || !isFinite(ball.velocity.z)) {
+      ball.position.set(0, 2, BOARD.height / 2);
+      ball.velocity.set(0, 0, 0);
+      ball.angularVelocity.set(0, 0, 0);
+      this.ballTimer = 0;
+      this.recoveryTries = 0;
+      this.lastTrackPos = null;
+      this.stillTimer = 0;
+      this._finishShot();
+      return;
+    }
     const speed = Math.hypot(ball.velocity.x, ball.velocity.y, ball.velocity.z);
+    if (speed < BALL.stuckSpeed) {
+      this.stuckTime += dt;
+      if (this.stuckTime > BALL.stuckTimeout) {
+        this.stuckTime = 0;
+        this.lastTrackPos = null;
+        this.stillTimer = 0;
+        this.recoveryTries += 1;
+        ball.wakeUp();
+        const spot = this._findOpenSpot(ball.position);
+        ball.position.set(spot.x, Math.min(ball.position.y, 2.5), spot.z);
+        ball.velocity.set((Math.random() * 2 - 1) * 40, 6, 20 + Math.random() * 22);
+        ball.angularVelocity.set(0, 0, 0);
+        if (this.recoveryTries > 5) {
+          this.recoveryTries = 0;
+          this._finishShot();
+          return;
+        }
+      }
+    } else {
+      this.stuckTime = 0;
+    }
+    const p = ball.position;
     if (!this.shotCommitted && p.x < LANE.dividerX - BALL.radius * 0.4) {
       this._commitShot();
     }
@@ -43530,7 +43832,7 @@ var Game = class {
       this.lastTrackPos = null;
       this.stillTimer = 0;
       this.recoveryTries += 1;
-      if (this.recoveryTries > 3) {
+      if (this.recoveryTries > 5) {
         this.recoveryTries = 0;
         this._finishShot();
         return;
@@ -43541,8 +43843,8 @@ var Game = class {
         this.lastTrackPos = { x: p.x, y: p.y, z: p.z };
         this.stillTimer = 0;
       } else {
-        const moved = Math.hypot(p.x - this.lastTrackPos.x, p.y - this.lastTrackPos.y, p.z - this.lastTrackPos.z);
-        if (moved < 3) {
+        const moved2 = Math.hypot(p.x - this.lastTrackPos.x, p.y - this.lastTrackPos.y, p.z - this.lastTrackPos.z);
+        if (moved2 < 3) {
           this.stillTimer += dt;
         } else {
           this.stillTimer = 0;
@@ -43559,11 +43861,41 @@ var Game = class {
       ball.position.set(spot.x, p.y + 1.5, spot.z);
       ball.velocity.set((Math.random() * 2 - 1) * 40, 6, 20 + Math.random() * 22);
       ball.angularVelocity.set(0, 0, 0);
-      if (this.recoveryTries > 3) {
+      if (this.recoveryTries > 5) {
         this.recoveryTries = 0;
         this._finishShot();
         return;
       }
+    }
+    const { x, z } = p;
+    if (Math.abs(x) > BOARD.width / 2 + BALL.outOfBoundsExtra || z > BOARD.height + BALL.outOfBoundsExtra || z < -BALL.outOfBoundsExtra) {
+      this._finishShot();
+    }
+    if (!this.continuousOverlapPos) {
+      this.continuousOverlapPos = { x: p.x, z: p.z };
+      this.continuousOverlapTimer = 0;
+    }
+    const moved = Math.hypot(p.x - this.continuousOverlapPos.x, p.z - this.continuousOverlapPos.z);
+    if (moved < 5) {
+      this.continuousOverlapTimer += dt;
+      if (this.continuousOverlapTimer > BALL.continuousOverlapTime) {
+        this.continuousOverlapTimer = 0;
+        this.continuousOverlapPos = null;
+        this.recoveryTries += 1;
+        ball.wakeUp();
+        const spot = this._findOpenSpot(p);
+        ball.position.set(spot.x, Math.min(p.y, 2.5), spot.z);
+        ball.velocity.set((Math.random() * 2 - 1) * 40, 6, 20 + Math.random() * 22);
+        ball.angularVelocity.set(0, 0, 0);
+        if (this.recoveryTries > 5) {
+          this.recoveryTries = 0;
+          this._finishShot();
+          return;
+        }
+      }
+    } else {
+      this.continuousOverlapPos = { x: p.x, z: p.z };
+      this.continuousOverlapTimer = 0;
     }
     if (this.ballTimer > DRAIN_TIMEOUT) {
       this._finishShot();
@@ -43571,30 +43903,64 @@ var Game = class {
   }
   /**
    * The ball landed in a scoring slot.
+   *
+   * Two independent rules stack here (see docs/game-spec.md §4):
+   *  - 〔設計〕every pocket pays `baseScore * that hole's multiplier` -- this
+   *    project's own scoring abstraction, always active.
+   *  - 〔實機〕only landing in the lane the LED roulette locked (`targetLane`)
+   *    is the real machine's actual win condition, and it pays out bonus
+   *    balls (`target`, one of 2/4/6/8/10), not points.
+   *
    * @param {number} lane zero-based scoring-lane index
    */
   _scorePocket(lane) {
+    if (this.state !== STATE.IN_PLAY || !this.machine.ballActive) return false;
     this._commitShot();
     const multiplier = HOLE_MULTIPLIERS[lane] ?? 1;
     const points = this.baseScore * multiplier;
+    const hitTarget = this.targetLane != null && lane === this.targetLane;
+    const reward = hitTarget ? this.target ?? 0 : 0;
     this.machine.ballActive = false;
     audio.pocket();
     this.score += points;
     this.hits += 1;
     this.earned += points;
+    if (reward > 0) {
+      this.balls += reward;
+      this.ballsWon += reward;
+      this.targetHits += 1;
+    }
     this.bestMultiplier = Math.max(this.bestMultiplier, multiplier);
     this.highestShot = Math.max(this.highestShot, points);
     this.multiplierStats[multiplier] = (this.multiplierStats[multiplier] ?? 0) + 1;
-    this.history.unshift({ shot: this.shots, multiplier, base: this.baseScore, points, lane });
+    this.history.unshift({
+      shot: this.shots,
+      multiplier,
+      base: this.baseScore,
+      points,
+      lane,
+      hitTarget,
+      reward
+    });
     this.history = this.history.slice(0, 12);
-    this.pendingResult = { type: "score", value: multiplier, lane, points, combo: 0 };
-    if (multiplier >= 5) audio.win();
-    this.ui?.shake(multiplier >= 10 ? 0.7 : 0.35);
+    this.pendingResult = {
+      type: "score",
+      value: multiplier,
+      lane,
+      points,
+      combo: 0,
+      hitTarget,
+      reward
+    };
+    if (hitTarget) audio.win();
+    else if (multiplier >= 5) audio.win();
+    this.ui?.shake(hitTarget || multiplier >= 10 ? 0.7 : 0.35);
     this.lastResult = this.pendingResult;
     this.state = STATE.RESOLVING;
     this.resolveTimer = 0;
     this.machine.setReadout(this.balls, this.target);
     this.ui?.render(this);
+    return true;
   }
   /** Advance the SUCCESS / MISS flash, then start the next ball. */
   _tickResolve(dt) {
@@ -43660,6 +44026,8 @@ var Game = class {
     this.stuckTime = 0;
     this.stillTimer = 0;
     this.lastTrackPos = null;
+    this.continuousOverlapPos = null;
+    this.continuousOverlapTimer = 0;
     this.recoveryTries = 0;
     this.shotCommitted = false;
     this.pendingResult = null;
@@ -43858,7 +44226,7 @@ var Controls = class {
   _onKey(event) {
     audio.unlock();
     this.orbit?.noteInteraction();
-    if (this.orbit && ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"].includes(event.code)) {
+    if (this.orbit && ["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"].includes(event.code)) {
       this._walk[event.code] = true;
       if (event.code.startsWith("Arrow")) event.preventDefault();
       return;
@@ -43867,7 +44235,9 @@ var Controls = class {
       case "Space": {
         event.preventDefault();
         if (event.repeat) break;
-        if (this.game.state === "READY" || this.game.state === "GAME_OVER") {
+        if (this.game.state === "SPINNING") {
+          this.game.stopSpin();
+        } else if (this.game.state === "READY" || this.game.state === "GAME_OVER") {
           this.game.pressStart();
         } else if (this.game.state === "AIMING") {
           this.spaceHeld = true;
@@ -43884,8 +44254,16 @@ var Controls = class {
       case "KeyR":
         this.game.reset();
         break;
+      case "KeyV": {
+        if (!this.orbit) break;
+        const free = this.orbit.setFreeMode(!this.orbit.free);
+        this.game.ui?.setCameraMode?.(free);
+        break;
+      }
       case "Enter":
-        if (this.game.state === "AIMING") {
+        if (this.game.state === "SPINNING") {
+          this.game.stopSpin();
+        } else if (this.game.state === "AIMING") {
           const pull = PLUNGER.maxPull * 0.65;
           this.machine.updatePlungerVisual(pull);
           this.game.releasePlunger(pull);
@@ -43921,7 +44299,8 @@ var Controls = class {
       const w = this._walk;
       const forward = (w.KeyW || w.ArrowUp ? 1 : 0) + (w.KeyS || w.ArrowDown ? -1 : 0);
       const strafe = (w.KeyD || w.ArrowRight ? 1 : 0) + (w.KeyA || w.ArrowLeft ? -1 : 0);
-      if (forward !== 0 || strafe !== 0) this.orbit.pan(forward, strafe, dt);
+      const up = (this.orbit.free && w.KeyE ? 1 : 0) + (this.orbit.free && w.KeyQ ? -1 : 0);
+      if (forward !== 0 || strafe !== 0 || up !== 0) this.orbit.pan(forward, strafe, dt, up);
     }
     if (this.spaceHeld && this.game.state === "AIMING") {
       this.pull = Math.min(PLUNGER.maxPull, this.pull + dt * 7.2);
@@ -43955,10 +44334,9 @@ var OrbitCamera = class {
     this.radiusGoal = this.radius;
     this.position = new Vector3(...CAMERA.position);
     this.lookAt = this.target.clone();
-    this.minPhi = 0.22;
-    this.maxPhi = 1.45;
-    this.minRadius = 60;
-    this.maxRadius = 380;
+    this.free = false;
+    this._baseTarget = this.target.clone();
+    this._limitsFor();
     this.rotateSpeed = 52e-4;
     this.zoomSpeed = 16e-4;
     this.stiffness = 9;
@@ -43973,6 +44351,59 @@ var OrbitCamera = class {
   /** Any game interaction (plunger, buttons, keys) resets the idle timer. */
   noteInteraction() {
     this.lastInput = performance.now();
+  }
+  /** Swap between the protected arcade limits and the unrestricted free rig. */
+  _limitsFor() {
+    if (this.free) {
+      this.minPhi = 0.08;
+      this.maxPhi = Math.PI / 2 - 0.02;
+      this.minRadius = 24;
+      this.maxRadius = 560;
+      this._panBox = {
+        x: 160,
+        zMin: this._baseTarget.z - 130,
+        zMax: this._baseTarget.z + 200,
+        yMin: this._baseTarget.y - 10,
+        yMax: this._baseTarget.y + 200
+      };
+    } else {
+      this.minPhi = 0.22;
+      this.maxPhi = 1.45;
+      this.minRadius = 60;
+      this.maxRadius = 380;
+      this._panBox = {
+        x: 90,
+        zMin: -70,
+        zMax: 130,
+        yMin: this._baseTarget.y,
+        yMax: this._baseTarget.y
+      };
+    }
+  }
+  _clampTarget() {
+    const b2 = this._panBox;
+    this.target.x = Math.max(-b2.x, Math.min(b2.x, this.target.x));
+    this.target.z = Math.max(b2.zMin, Math.min(b2.zMax, this.target.z));
+    this.target.y = Math.max(b2.yMin, Math.min(b2.yMax, this.target.y));
+  }
+  /**
+   * Toggle the free-look rig. Returning to standard mode slides the camera
+   * back to the arcade framing so a stray never leaves the player lost.
+   * @param {boolean} on
+   * @returns {boolean} the new mode (for HUD/controls feedback)
+   */
+  setFreeMode(on) {
+    const free = !!on;
+    if (free !== this.free) {
+      this.free = free;
+      this._limitsFor();
+      this.phiGoal = Math.max(this.minPhi, Math.min(this.maxPhi, this.phiGoal));
+      this.radiusGoal = Math.max(this.minRadius, Math.min(this.maxRadius, this.radiusGoal));
+      this._clampTarget();
+      if (!free) this.returnToDefault();
+    }
+    this.lastInput = performance.now();
+    return this.free;
   }
   /**
    * Ease back to the standard playing view. Called when a new ball is loaded
@@ -44007,12 +44438,14 @@ var OrbitCamera = class {
     this.radiusGoal = Math.max(this.minRadius, Math.min(this.maxRadius, this.radiusGoal * ratio));
   }
   /**
-   * Move the orbit target across the ground plane: walk around the machine.
+   * Move the orbit target: walk around the machine (free mode also rises and
+   * falls with `up`).
    * @param {number} forward +1 = walk toward where the camera looks
    * @param {number} strafe  +1 = step right
    * @param {number} dt      seconds this frame (speed scales with dt)
+   * @param {number} [up]    +1 = rise, -1 = sink (free mode only)
    */
-  pan(forward, strafe, dt) {
+  pan(forward, strafe, dt, up = 0) {
     this.lastInput = performance.now();
     const fx = -Math.sin(this.theta);
     const fz = -Math.cos(this.theta);
@@ -44021,12 +44454,12 @@ var OrbitCamera = class {
     const speed = this.radius * 0.55 * dt;
     this.target.x += (fx * forward + rx * strafe) * speed;
     this.target.z += (fz * forward + rz * strafe) * speed;
-    this.target.x = Math.max(-90, Math.min(90, this.target.x));
-    this.target.z = Math.max(-70, Math.min(130, this.target.z));
+    this.target.y += up * speed * 0.9;
+    this._clampTarget();
   }
   /** @param {number} dt seconds since the previous frame */
   update(dt) {
-    if (!this.suspendShowcase && performance.now() - this.lastInput > this.idleAfter * 1e3) {
+    if (!this.free && !this.suspendShowcase && performance.now() - this.lastInput > this.idleAfter * 1e3) {
       this.thetaGoal += dt * this.idleSpin;
       const ease = 1 - Math.exp(-dt * 0.6);
       this.radiusGoal += (this.idleRadius - this.radiusGoal) * ease;
@@ -44071,6 +44504,7 @@ var UI = class {
       mute: document.getElementById("mute"),
       loading: document.getElementById("loading"),
       welcome: document.getElementById("welcome"),
+      welcomeBalls: document.getElementById("welcome-balls"),
       welcomeStart: document.getElementById("welcome-start"),
       touchPower: document.getElementById("touch-power"),
       touchPowerValue: document.getElementById("touch-power-value"),
@@ -44196,6 +44630,13 @@ var UI = class {
     const { state } = game2;
     if (this.el.balls) this.el.balls.textContent = String(game2.balls);
     if (this.el.base) this.el.base.textContent = String(game2.baseScore ?? 20);
+    if (this.el.welcomeBalls) this.el.welcomeBalls.textContent = String(game2.batchSize ?? 10);
+    document.querySelectorAll("[data-base-score]").forEach((button) => {
+      button.classList.toggle("selected", Number(button.dataset.baseScore) === game2.baseScore);
+    });
+    document.querySelectorAll("[data-batch-size]").forEach((button) => {
+      button.classList.toggle("selected", Number(button.dataset.batchSize) === game2.batchSize);
+    });
     this.renderScore(game2);
     this.renderHistory(game2);
     this.renderStats(game2);
@@ -44242,7 +44683,8 @@ var UI = class {
       case "IN_PLAY":
         return "\u92FC\u73E0\u7A7F\u8D8A\u91D8\u9663\u4E2D\u2026";
       case "RESOLVING":
-        return game2.pendingResult?.type === "score" ? `\u9032\u5165 \xD7${game2.pendingResult.value} \u6D1E\uFF01` : "\u5F48\u73E0\u672A\u9032\u6D1E\uFF0C\u518D\u4F86\u4E00\u7403";
+        if (game2.pendingResult?.type !== "score") return "\u5F48\u73E0\u672A\u9032\u6D1E\uFF0C\u518D\u4F86\u4E00\u7403";
+        return game2.pendingResult.hitTarget ? `\u547D\u4E2D\u6307\u5B9A\u7403\u9053\uFF01\u8D0F\u5F97 ${game2.pendingResult.reward} \u9846\u5F48\u73E0` : `\u9032\u5165 \xD7${game2.pendingResult.value} \u6D1E\uFF01`;
       case "GAME_OVER":
         return "\u672C\u5F35\u7968\u5238\u5DF2\u7D50\u7B97";
       default:
@@ -44252,7 +44694,7 @@ var UI = class {
   _hintText(game2) {
     switch (game2.state) {
       case "READY":
-        return "\u6BCF\u5C40\u5171 10 \u9846\uFF0C\u9010\u9846\u6295\u5165\uFF1BSPACE \u6216\u9EDE\u767D\u8272\u6309\u9215\u958B\u59CB\u8DF3\u71C8";
+        return "\u6BCF\u5C40\u5171 " + (game2.batchSize ?? 10) + " \u9846\uFF0C\u9010\u9846\u6295\u5165\uFF1BSPACE \u6216\u9EDE\u767D\u8272\u6309\u9215\u958B\u59CB\u8DF3\u71C8";
       case "AIMING":
         return "\u5C07\u62C9\u687F\u5F80\u4E0B\u62C9\u51FA\u84C4\u529B\u3001\u653E\u958B\u767C\u5C04\uFF1B\u529B\u9053\u4E0D\u8DB3\u6703\u9000\u56DE\u539F\u4F4D";
       default:
@@ -44266,11 +44708,11 @@ var UI = class {
   flashResult(result) {
     const el = this.el.flash;
     if (!el) return;
-    if (result.type === "score") el.textContent = `\xD7${result.value}\uFF01  +${result.points} \u5206`;
-    else if (result.type === "miss") el.textContent = `\u843D\u5165\u7B2C ${result.lane + 1} \u9053`;
+    if (result.type === "score" && result.hitTarget) el.textContent = `\u547D\u4E2D\u6307\u5B9A\u7403\u9053\uFF01+${result.reward} \u9846\u5F48\u73E0 \u30FB +${result.points} \u5206`;
+    else if (result.type === "score") el.textContent = `\xD7${result.value}\uFF01  +${result.points} \u5206`;
     else if (result.type === "retry") el.textContent = "\u529B\u9053\u4E0D\u8DB3\u30FB\u518D\u62C9\u4E00\u6B21";
     else el.textContent = "\u672A\u9032\u7403\u69FD";
-    el.dataset.type = result.type === "score" ? result.value >= 10 ? "jackpot" : "score" : result.type;
+    el.dataset.type = result.type === "score" ? result.hitTarget ? "jackpot" : result.value >= 10 ? "jackpot" : "score" : result.type;
     el.classList.add("visible");
     this._flashTimer = 1.15;
   }
@@ -44282,6 +44724,8 @@ var UI = class {
       this.el.summary.innerHTML = [
         `\u672C\u5C40\u767C\u5C04\uFF1A<b>${game2.shots}</b> \u9846`,
         `\u6210\u529F\u547D\u4E2D\uFF1A<b>${game2.hits}</b> \u6B21`,
+        `\u547D\u4E2D\u6307\u5B9A\u7403\u9053\uFF1A<b>${game2.targetHits ?? 0}</b> \u6B21`,
+        `\u8D0F\u56DE\u7403\u6578\uFF1A<b>${game2.ballsWon ?? 0}</b> \u9846`,
         `\u672C\u5C40\u7E3D\u5206\uFF1A<b>${game2.score}</b>`,
         `\u6700\u9AD8\u55AE\u6B21\uFF1A<b>${game2.highestShot}</b>`
       ].join("<br>");
@@ -44373,14 +44817,15 @@ function frame() {
   if (window.__pinballTestDrive) {
     return;
   }
-  const dt = Math.min(clock.getDelta(), 0.05);
-  game.update(dt);
-  controls.update(dt);
-  ui.update(dt);
+  const rawDt = clock.getDelta();
+  const presentDt = Math.min(rawDt, 0.05);
+  game.update(rawDt);
+  controls.update(presentDt);
+  ui.update(presentDt);
   orbit.suspendShowcase = game.state !== "READY" && game.state !== "GAME_OVER";
-  if (game.state === "AIMING" && lastGameState !== "AIMING") orbit.returnToDefault();
+  if (!orbit.free && game.state === "AIMING" && lastGameState !== "AIMING") orbit.returnToDefault();
   lastGameState = game.state;
-  orbit.update(dt);
+  orbit.update(presentDt);
   const camPos = orbit.position;
   const camLook = orbit.lookAt;
   camera.position.set(
@@ -44411,7 +44856,7 @@ window.addEventListener("resize", onResize);
 onResize();
 ui.setMuted(audio.muted);
 frame();
-window.__pinball = { machine, game, controls, ui, audio, camera, orbit, scene, renderer, THREE: three_module_exports, TILT };
+window.__pinball = { machine, game, controls, ui, audio, camera, orbit, scene, renderer, THREE: three_module_exports, CANNON: cannon_es_exports, TILT, stepper: game.stepper };
 /*! Bundled license information:
 
 three/build/three.module.js:

@@ -103,6 +103,8 @@ export async function playManyShots(page) {
             result: game.lastResult?.type ?? null,
             value: game.lastResult?.value ?? null,
             lane: game.lastResult?.lane ?? null,
+            hitTarget: game.lastResult?.hitTarget ?? false,
+            reward: game.lastResult?.reward ?? 0,
             moved: sawMove,
             returned: game.shots === shotsBefore,
           },

@@ -30,8 +30,9 @@ export function reportLoop(sim) {
     `slots hit: ${[...distinct].sort((a, b) => a - b).join(', ')}`);
 
   console.log(`      shot log: ${resolved.map((o) => (
-    o.result === 'win' ? `WIN×${o.value}@lane${o.lane + 1}`
-      : o.result === 'miss' ? `miss(lane${o.lane + 1})` : 'drain'
+    o.result === 'score'
+      ? (o.hitTarget ? `HIT×${o.value}+${o.reward}balls@lane${o.lane + 1}` : `×${o.value}@lane${o.lane + 1}`)
+      : 'drain'
   )).join(' ')}`);
 
   const scores = sim.outcomes.filter((o) => o.result === 'score');
@@ -39,9 +40,13 @@ export function reportLoop(sim) {
     scores.every((o) => Number.isFinite(o.value)),
     `${scores.length} scored holes`);
 
-  check('every committed shot costs exactly one ball',
-    sim.outcomes.every((o) => o.after === o.before - 1),
-    `${sim.outcomes.length} committed shots`);
+  check('every committed shot costs exactly one ball, plus any target-lane reward',
+    sim.outcomes.every((o) => o.after === o.before - 1 + (o.hitTarget ? o.reward : 0)),
+    JSON.stringify(sim.outcomes.filter((o) => o.after !== o.before - 1 + (o.hitTarget ? o.reward : 0))));
+
+  check('a target-lane hit always carries a positive reward',
+    sim.outcomes.filter((o) => o.hitTarget).every((o) => o.reward > 0),
+    JSON.stringify(sim.outcomes.filter((o) => o.hitTarget && !(o.reward > 0))));
 
   const range = Math.max(...sim.speeds) - Math.min(...sim.speeds);
   check('plunger power changes launch speed', range > 80,

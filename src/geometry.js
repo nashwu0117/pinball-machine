@@ -12,7 +12,7 @@
  */
 
 import * as THREE from 'three';
-import { BOARD, PALETTE, POCKETS, POCKET, POCKET_ARCH, LANE, PLUNGER, STAND, TILT, HOLE_MULTIPLIERS } from './config.js';
+import { BOARD, PALETTE, POCKETS, POCKET, LANE, PLUNGER, STAND, TILT, HOLE_MULTIPLIERS } from './config.js';
 import { CANNON, MATERIALS } from './physics.js';
 import { buildPegs, buildBumpers, buildDeflectors, buildPocketDividers, pocketFloorZ } from './layout.js';
 

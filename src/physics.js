@@ -8,7 +8,7 @@
  */
 
 import * as CANNON from 'cannon-es';
-import { BALL, BOARD, PHYSICS } from './config.js';
+import { BALL, GRAVITY, PHYSICS } from './config.js';
 
 export const MATERIALS = {};
 
@@ -100,23 +100,28 @@ export function createWorld() {
  * @returns {CANNON.Vec3}
  */
 export function tiltedGravity(tilt) {
-  const g = BALL.mass ? 981 : 981;
-  return new CANNON.Vec3(0, -g * Math.cos(tilt), g * Math.sin(tilt));
+  return new CANNON.Vec3(0, -GRAVITY * Math.cos(tilt), GRAVITY * Math.sin(tilt));
 }
 
 /**
- * The `step()` wrapper. We always use a fixed timestep with a bounded number of
- * substeps; this is what stops a fast ball from tunnelling through a peg when
- * the browser drops a frame (a 305 cm/s ball moves only 1.3 cm per substep).
+ * Reset any dynamic body that has drifted into NaN/Inf before the solver sees
+ * it. Cheap (the world is mostly static bodies) and it keeps one bad contact
+ * from poisoning the whole simulation.
  *
  * @param {CANNON.World} world
- * @param {number} frameDelta seconds since last frame
  */
-export function stepWorld(world, frameDelta) {
-  // Clamp the incoming delta: a tab that was backgrounded for 4 seconds must
-  // not push the ball through the machine in one go.
-  const dt = Math.min(frameDelta, 0.05);
-  world.step(PHYSICS.fixedStep, dt, PHYSICS.maxSubSteps);
+export function sanitizeBodies(world) {
+  for (const body of world.bodies) {
+    if (body.mass <= 0) continue;
+    if (
+      !isFinite(body.position.x) || !isFinite(body.position.y) || !isFinite(body.position.z) ||
+      !isFinite(body.velocity.x) || !isFinite(body.velocity.y) || !isFinite(body.velocity.z)
+    ) {
+      body.position.set(0, 2, 0);
+      body.velocity.set(0, 0, 0);
+      body.angularVelocity.set(0, 0, 0);
+    }
+  }
 }
 
 /**
@@ -128,22 +133,11 @@ export function clampSpeed(body, max) {
   const v = body.velocity;
   const speedSq = v.lengthSquared();
   if (speedSq > max * max) {
-    const scale = max / Math.sqrt(speedSq);
+    // Guard against NaN/Inf in speed calculation
+    const speed = Math.sqrt(Math.max(0, speedSq));
+    const scale = max / speed;
     v.scale(scale, v);
   }
 }
 
 export { CANNON };
-
-/** Convenience re-export so modules do not each import three + cannon. */
-export const V = {
-  /** Convert a cannon Vec3 to a plain object (debugging). */
-  dump: (v) => ({ x: v.x, y: v.y, z: v.z }),
-};
-
-export const BOARD_LIMITS = {
-  /** Half-width of the playable floor. */
-  halfWidth: BOARD.width / 2,
-  /** Half-height (along z) of the playable floor. */
-  halfHeight: BOARD.height / 2,
-};

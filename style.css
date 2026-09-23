@@ -170,6 +170,7 @@ html, body {
 }
 
 .score-readout { min-width: 126px; }
+.score-note { margin: 4px 0 0; color: #b9a684; font-size: 10px; }
 .score-readout .value {
   color: #79e8ff;
   font-size: 23px;
@@ -631,6 +632,7 @@ kbd {
   .readout .label { font-size: 8px; }
   .readout .value { font-size: 19px; }
   .score-readout { min-width: 92px; }
+  .score-note { font-size: 8px; }
   .score-readout .value { font-size: 17px; }
   .status-row { margin-top: 6px; }
   .status { font-size: 12px; }

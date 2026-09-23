@@ -39,11 +39,11 @@ export class OrbitCamera {
     this.lookAt = this.target.clone();
 
     // Limits: never dip under the floor plane, never clip inside the cabinet,
-    // never zoom out into the fog.
-    this.minPhi = 0.22;
-    this.maxPhi = 1.45;
-    this.minRadius = 60;
-    this.maxRadius = 380;
+    // never zoom out into the fog. Free mode (V) relaxes all three so the
+    // player can walk around and look up at the machine like a real arcade.
+    this.free = false;
+    this._baseTarget = this.target.clone();
+    this._limitsFor();
 
     /** Radians of orbit per pixel of drag. */
     this.rotateSpeed = 0.0052;
@@ -70,6 +70,62 @@ export class OrbitCamera {
   /** Any game interaction (plunger, buttons, keys) resets the idle timer. */
   noteInteraction() {
     this.lastInput = performance.now();
+  }
+
+  /** Swap between the protected arcade limits and the unrestricted free rig. */
+  _limitsFor() {
+    if (this.free) {
+      this.minPhi = 0.08;
+      this.maxPhi = Math.PI / 2 - 0.02;
+      this.minRadius = 24;
+      this.maxRadius = 560;
+      this._panBox = {
+        x: 160,
+        zMin: this._baseTarget.z - 130,
+        zMax: this._baseTarget.z + 200,
+        yMin: this._baseTarget.y - 10,
+        yMax: this._baseTarget.y + 200,
+      };
+    } else {
+      this.minPhi = 0.22;
+      this.maxPhi = 1.45;
+      this.minRadius = 60;
+      this.maxRadius = 380;
+      this._panBox = {
+        x: 90,
+        zMin: -70,
+        zMax: 130,
+        yMin: this._baseTarget.y,
+        yMax: this._baseTarget.y,
+      };
+    }
+  }
+
+  _clampTarget() {
+    const b = this._panBox;
+    this.target.x = Math.max(-b.x, Math.min(b.x, this.target.x));
+    this.target.z = Math.max(b.zMin, Math.min(b.zMax, this.target.z));
+    this.target.y = Math.max(b.yMin, Math.min(b.yMax, this.target.y));
+  }
+
+  /**
+   * Toggle the free-look rig. Returning to standard mode slides the camera
+   * back to the arcade framing so a stray never leaves the player lost.
+   * @param {boolean} on
+   * @returns {boolean} the new mode (for HUD/controls feedback)
+   */
+  setFreeMode(on) {
+    const free = !!on;
+    if (free !== this.free) {
+      this.free = free;
+      this._limitsFor();
+      this.phiGoal = Math.max(this.minPhi, Math.min(this.maxPhi, this.phiGoal));
+      this.radiusGoal = Math.max(this.minRadius, Math.min(this.maxRadius, this.radiusGoal));
+      this._clampTarget();
+      if (!free) this.returnToDefault();
+    }
+    this.lastInput = performance.now();
+    return this.free;
   }
 
   /**
@@ -108,12 +164,14 @@ export class OrbitCamera {
   }
 
   /**
-   * Move the orbit target across the ground plane: walk around the machine.
+   * Move the orbit target: walk around the machine (free mode also rises and
+   * falls with `up`).
    * @param {number} forward +1 = walk toward where the camera looks
    * @param {number} strafe  +1 = step right
    * @param {number} dt      seconds this frame (speed scales with dt)
+   * @param {number} [up]    +1 = rise, -1 = sink (free mode only)
    */
-  pan(forward, strafe, dt) {
+  pan(forward, strafe, dt, up = 0) {
     this.lastInput = performance.now();
     // Horizontal basis of the current view.
     const fx = -Math.sin(this.theta);
@@ -125,17 +183,19 @@ export class OrbitCamera {
     const speed = this.radius * 0.55 * dt;
     this.target.x += (fx * forward + rx * strafe) * speed;
     this.target.z += (fz * forward + rz * strafe) * speed;
+    this.target.y += up * speed * 0.9;
 
     // Keep the machine in reach: never wander into the fog.
-    this.target.x = Math.max(-90, Math.min(90, this.target.x));
-    this.target.z = Math.max(-70, Math.min(130, this.target.z));
+    this._clampTarget();
   }
 
   /** @param {number} dt seconds since the previous frame */
   update(dt) {
     // Idle showcase: slow continuous orbit until the player touches anything.
-    // Suspended while a round is live so it never fights the aiming view.
-    if (!this.suspendShowcase && performance.now() - this.lastInput > this.idleAfter * 1000) {
+    // Suspended while a round is live so it never fights the aiming view, and
+    // entirely in free mode where the player owns the camera.
+    if (!this.free && !this.suspendShowcase
+      && performance.now() - this.lastInput > this.idleAfter * 1000) {
       this.thetaGoal += dt * this.idleSpin;
       const ease = 1 - Math.exp(-dt * 0.6);
       this.radiusGoal += (this.idleRadius - this.radiusGoal) * ease;

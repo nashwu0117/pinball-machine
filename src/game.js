@@ -22,7 +22,8 @@ import {
   STARTING_BALLS, TARGETS, PLUNGER, BALL, BOARD, POCKET, LANE,
   BASE_SCORE_OPTIONS, SHOT_BATCH_OPTIONS, HOLE_MULTIPLIERS,
 } from './config.js';
-import { stepWorld } from './physics.js';
+import { FixedTimestepRunner } from './loop.js';
+import { sanitizeBodies } from './physics.js';
 import { audio } from './audio.js';
 
 export const STATE = {
@@ -36,7 +37,7 @@ export const STATE = {
 
 const SPIN_DURATION = 1.5;
 /** How long to watch a ball before giving up and calling it a drain. */
-const DRAIN_TIMEOUT = 12;
+const DRAIN_TIMEOUT = BALL.maxSurvivalTime;
 /** How long the SUCCESS / MISS flash stays on screen. */
 const RESOLVE_DURATION = 1.15;
 const SCORE_STORAGE_KEY = 'night-market-pinball-high-score';
@@ -48,6 +49,9 @@ export class Game {
   constructor(machine) {
     this.machine = machine;
     this.ui = null;
+    // Owns the fixed-timestep accumulator, the per-frame physics time budget
+    // and the adaptive solver precision. See src/loop.js.
+    this.stepper = new FixedTimestepRunner();
     this.reset();
     this._wire();
   }
@@ -74,6 +78,11 @@ export class Game {
     this.hits = 0;
     this.score = 0;
     this.highestShot = 0;
+    /** Bonus balls won by hitting the locked target lane (the real machine's
+        actual reward -- see _scorePocket). Distinct from `score`, which is
+        this project's own scoring abstraction and pays out on every pocket. */
+    this.ballsWon = 0;
+    this.targetHits = 0;
     this.history = [];
     this.multiplierStats = Object.fromEntries(HOLE_MULTIPLIERS.map((m) => [m, 0]));
     this.combo = 0;
@@ -88,6 +97,8 @@ export class Game {
     this.stuckTime = 0;
     this.stillTimer = 0;
     this.lastTrackPos = null;
+    this.continuousOverlapPos = null;
+    this.continuousOverlapTimer = 0;
     this.recoveryTries = 0;
     this.shotCommitted = false;
     this.lastResult = null;
@@ -95,6 +106,22 @@ export class Game {
 
     this.state = STATE.READY;
     this.machine.ballActive = false;
+    // Park and stop the reusable body while no shot is active. Otherwise a
+    // scored/drained ball keeps receiving gravity and can emit hidden contact
+    // effects between rounds or while the game-over card is visible.
+    const body = this.machine.ballBody;
+    body.position?.set(
+      this.machine.barrelX ?? LANE.channelX,
+      BALL.radius + 1.1,
+      LANE.loadZ + 2.0,
+    );
+    body.velocity?.set(0, 0, 0);
+    body.angularVelocity?.set(0, 0, 0);
+    body.force?.set(0, 0, 0);
+    body.torque?.set(0, 0, 0);
+    body.wakeUp?.();
+    // Drop any backlog from the previous round so a fresh game starts level.
+    this.stepper.reset();
     this.machine.clearLeds();
     this.machine.clearLaneLeds?.();
     this.machine.setReadout(this.balls, null);
@@ -224,6 +251,8 @@ export class Game {
     this.stuckTime = 0;
     this.stillTimer = 0;
     this.lastTrackPos = null;
+    this.continuousOverlapPos = null;
+    this.continuousOverlapTimer = 0;
     this.recoveryTries = 0;
     this.shotCommitted = false;
     this.pendingResult = null;
@@ -240,24 +269,41 @@ export class Game {
   // -------------------------------------------------------------- per-frame
 
   /**
+   * One rendered frame.
+   *
+   * The physics world is advanced by `game.stepper`, which never spends more
+   * than its wall-clock budget and never chases more than `maxSubSteps` fixed
+   * slices. Whatever did not fit is deferred, so this method always returns
+   * promptly and the caller can render + service input.
+   *
    * @param {number} frameDelta seconds since the previous frame
+   * @returns {object} the scheduler telemetry for this frame (see src/loop.js)
    */
   update(frameDelta) {
+    // Never hand the solver NaN/Inf state (see physics.js).
+    sanitizeBodies(this.machine.world);
+
+    const step = this.stepper.advance(this.machine.world, frameDelta);
+
+    // Presentation (LED roulette, flash timers, visual easing) runs on the
+    // wall clock; ball tracking runs on simulated time so a deferred frame
+    // cannot age the shot or fake a timeout.
+    const renderDt = step.renderDt;
+    const physicsDt = step.simulatedDt;
+
     if (this.state === STATE.SPINNING) {
-      this._updateSpin(frameDelta);
-      stepWorld(this.machine.world, frameDelta);
-      this.machine.update(frameDelta);
-      return;
+      this._updateSpin(renderDt);
     }
 
-    stepWorld(this.machine.world, frameDelta);
-    this.machine.update(frameDelta);
+    this.machine.update(renderDt, this.stepper.alpha);
 
     if (this.state === STATE.IN_PLAY) {
-      this._trackBall(frameDelta);
+      this._trackBall(physicsDt);
     } else if (this.state === STATE.RESOLVING) {
-      this._tickResolve(frameDelta);
+      this._tickResolve(renderDt);
     }
+
+    return step;
   }
 
   /**
@@ -268,8 +314,48 @@ export class Game {
     const ball = this.machine.ballBody;
     this.ballTimer += dt;
 
-    const p = ball.position;
+    // --- invalidate guards: if position/velocity became NaN/Inf, reset immediately ---
+    if (
+      !isFinite(ball.position.x) || !isFinite(ball.position.y) || !isFinite(ball.position.z) ||
+      !isFinite(ball.velocity.x) || !isFinite(ball.velocity.y) || !isFinite(ball.velocity.z)
+    ) {
+      ball.position.set(0, 2, BOARD.height / 2);
+      ball.velocity.set(0, 0, 0);
+      ball.angularVelocity.set(0, 0, 0);
+      this.ballTimer = 0;
+      this.recoveryTries = 0;
+      this.lastTrackPos = null;
+      this.stillTimer = 0;
+      this._finishShot();
+      return;
+    }
+
     const speed = Math.hypot(ball.velocity.x, ball.velocity.y, ball.velocity.z);
+
+    // --- stuck detection: ball nearly stationary for too long ---
+    if (speed < BALL.stuckSpeed) {
+      this.stuckTime += dt;
+      if (this.stuckTime > BALL.stuckTimeout) {
+        this.stuckTime = 0;
+        this.lastTrackPos = null;
+        this.stillTimer = 0;
+        this.recoveryTries += 1;
+        ball.wakeUp();
+        const spot = this._findOpenSpot(ball.position);
+        ball.position.set(spot.x, Math.min(ball.position.y, 2.5), spot.z);
+        ball.velocity.set((Math.random() * 2 - 1) * 40, 6, 20 + Math.random() * 22);
+        ball.angularVelocity.set(0, 0, 0);
+        if (this.recoveryTries > 5) {
+          this.recoveryTries = 0;
+          this._finishShot();
+          return;
+        }
+      }
+    } else {
+      this.stuckTime = 0;
+    }
+
+    const p = ball.position;
 
     // A ball is not spent merely because the plunger moved. Charge the ball
     // only after it has genuinely left the right-hand launch channel and
@@ -314,7 +400,7 @@ export class Game {
       this.lastTrackPos = null;
       this.stillTimer = 0;
       this.recoveryTries += 1;
-      if (this.recoveryTries > 3) {
+      if (this.recoveryTries > 5) {
         this.recoveryTries = 0;
         this._finishShot();
         return;
@@ -348,14 +434,54 @@ export class Game {
       ball.position.set(spot.x, p.y + 1.5, spot.z);
       ball.velocity.set((Math.random() * 2 - 1) * 40, 6, 20 + Math.random() * 22);
       ball.angularVelocity.set(0, 0, 0);
-      if (this.recoveryTries > 3) {
+      if (this.recoveryTries > 5) {
         this.recoveryTries = 0;
         this._finishShot();
         return;
       }
     }
 
+    // --- extreme out-of-bounds guard ---
+    // If the ball has gone far beyond the playfield walls, force-finish the shot.
+    const { x, z } = p;
+    if (Math.abs(x) > BOARD.width / 2 + BALL.outOfBoundsExtra
+        || z > BOARD.height + BALL.outOfBoundsExtra
+        || z < -BALL.outOfBoundsExtra) {
+      this._finishShot();
+    }
+
+    // --- continuous overlap guard ---
+    // If the ball has remained in a confined area for too long, relocate it.
+    if (!this.continuousOverlapPos) {
+      this.continuousOverlapPos = { x: p.x, z: p.z };
+      this.continuousOverlapTimer = 0;
+    }
+    const moved = Math.hypot(p.x - this.continuousOverlapPos.x, p.z - this.continuousOverlapPos.z);
+    if (moved < 5.0) {
+      this.continuousOverlapTimer += dt;
+      if (this.continuousOverlapTimer > BALL.continuousOverlapTime) {
+        this.continuousOverlapTimer = 0;
+        this.continuousOverlapPos = null;
+        this.recoveryTries += 1;
+        ball.wakeUp();
+        const spot = this._findOpenSpot(p);
+        ball.position.set(spot.x, Math.min(p.y, 2.5), spot.z);
+        ball.velocity.set((Math.random() * 2 - 1) * 40, 6, 20 + Math.random() * 22);
+        ball.angularVelocity.set(0, 0, 0);
+        if (this.recoveryTries > 5) {
+          this.recoveryTries = 0;
+          this._finishShot();
+          return;
+        }
+      }
+    } else {
+      this.continuousOverlapPos = { x: p.x, z: p.z };
+      this.continuousOverlapTimer = 0;
+    }
+
     // --- overall timeout ---------------------------------------------------
+    // Hard cap: if the ball has been on board too long without scoring or
+    // committing, force-finish the shot to free the thread.
     if (this.ballTimer > DRAIN_TIMEOUT) {
       this._finishShot();
     }
@@ -363,33 +489,59 @@ export class Game {
 
   /**
    * The ball landed in a scoring slot.
+   *
+   * Two independent rules stack here (see docs/game-spec.md §4):
+   *  - 〔設計〕every pocket pays `baseScore * that hole's multiplier` -- this
+   *    project's own scoring abstraction, always active.
+   *  - 〔實機〕only landing in the lane the LED roulette locked (`targetLane`)
+   *    is the real machine's actual win condition, and it pays out bonus
+   *    balls (`target`, one of 2/4/6/8/10), not points.
+   *
    * @param {number} lane zero-based scoring-lane index
    */
   _scorePocket(lane) {
+    // A pocket can only resolve the currently active shot. This protects the
+    // state machine from duplicate sensor/collision notifications in the same
+    // frame and keeps a stale event from awarding balls twice.
+    if (this.state !== STATE.IN_PLAY || !this.machine.ballActive) return false;
+
     // Defensive fallback: a scoring ball necessarily reached the playfield,
     // even if an unusually large physics step skipped the exit check above.
     this._commitShot();
     const multiplier = HOLE_MULTIPLIERS[lane] ?? 1;
     const points = this.baseScore * multiplier;
+    const hitTarget = this.targetLane != null && lane === this.targetLane;
+    const reward = hitTarget ? (this.target ?? 0) : 0;
     this.machine.ballActive = false;
     audio.pocket();
     this.score += points;
     this.hits += 1;
     this.earned += points;
+    if (reward > 0) {
+      this.balls += reward;
+      this.ballsWon += reward;
+      this.targetHits += 1;
+    }
     this.bestMultiplier = Math.max(this.bestMultiplier, multiplier);
     this.highestShot = Math.max(this.highestShot, points);
     this.multiplierStats[multiplier] = (this.multiplierStats[multiplier] ?? 0) + 1;
-    this.history.unshift({ shot: this.shots, multiplier, base: this.baseScore, points, lane });
+    this.history.unshift({
+      shot: this.shots, multiplier, base: this.baseScore, points, lane, hitTarget, reward,
+    });
     this.history = this.history.slice(0, 12);
-    this.pendingResult = { type: 'score', value: multiplier, lane, points, combo: 0 };
-    if (multiplier >= 5) audio.win();
-    this.ui?.shake(multiplier >= 10 ? 0.7 : 0.35);
+    this.pendingResult = {
+      type: 'score', value: multiplier, lane, points, combo: 0, hitTarget, reward,
+    };
+    if (hitTarget) audio.win();
+    else if (multiplier >= 5) audio.win();
+    this.ui?.shake(hitTarget || multiplier >= 10 ? 0.7 : 0.35);
 
     this.lastResult = this.pendingResult;
     this.state = STATE.RESOLVING;
     this.resolveTimer = 0;
     this.machine.setReadout(this.balls, this.target);
     this.ui?.render(this);
+    return true;
   }
 
   /** Advance the SUCCESS / MISS flash, then start the next ball. */
@@ -464,6 +616,8 @@ export class Game {
     this.stuckTime = 0;
     this.stillTimer = 0;
     this.lastTrackPos = null;
+    this.continuousOverlapPos = null;
+    this.continuousOverlapTimer = 0;
     this.recoveryTries = 0;
     this.shotCommitted = false;
     this.pendingResult = null;

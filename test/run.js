@@ -12,13 +12,23 @@
  */
 
 import puppeteer from 'puppeteer';
+import { existsSync } from 'node:fs';
 import { playManyShots, chaosTest, measureFrames, inspectMachine } from './probe.js';
 import { check, report } from './assert.js';
 import { reportLoop } from './loopreport.js';
 
 const URL = process.env.PINBALL_URL || 'http://localhost:8181/index.html';
-const EXECUTABLE = process.env.CHROME_PATH
-  || '/tmp/chs/chrome-headless-shell-linux64/chrome-headless-shell';
+const EXECUTABLE = [
+  process.env.CHROME_PATH,
+  '/tmp/chs/chrome-headless-shell-linux64/chrome-headless-shell',
+  '/home/nash/.cache/puppeteer/chrome-headless-shell/linux-153.0.8010.36/chrome-headless-shell-linux64/chrome-headless-shell',
+  '/home/nash/.cache/hyperframes/chrome/chrome-headless-shell/linux-152.0.7977.30/chrome-headless-shell-linux64/chrome-headless-shell',
+].filter(Boolean).find((path) => existsSync(path));
+
+if (!EXECUTABLE) {
+  console.error('No Chrome binary found. Set CHROME_PATH.');
+  process.exit(2);
+}
 
 export const TARGET_VALUES = [2, 4, 6, 8, 10];
 
@@ -129,16 +139,21 @@ async function main() {
   // ------------------------------------------------------------------ the loop
   const sim = await playManyShots(page);
   for (const [i, r] of sim.outcomes.entries()) {
-    const label = r.result === 'win' ? `WIN ×${r.value} lane ${r.lane + 1}`
-      : r.result === 'miss' ? `miss (lane ${r.lane + 1})` : r.result ?? '?';
+    const label = r.result === 'score'
+      ? (r.hitTarget ? `HIT target! +${r.reward} balls, ×${r.value} lane ${r.lane + 1}`
+        : `×${r.value} lane ${r.lane + 1}`)
+      : r.result === 'drain' ? 'drain' : r.result ?? '?';
     console.log(`      shot ${i + 1}: target=${r.target} balls ${r.before}->${r.after} ${label}`);
   }
   reportLoop(sim);
 
   // -------------------------------------------------------- game over + reset
-  // Wins may have earned extra balls, so play full launches until the machine
-  // actually runs out. Weak launches now correctly return the same ball.
-  for (let i = 0; i < 40; i++) {
+  // Wins may have earned extra balls (target-lane hits pay out 2/4/6/8/10
+  // bonus balls -- see _scorePocket), so this can run more than STARTING_BALLS
+  // shots. The expected payout is still well under the per-shot cost on
+  // average, so a generous cap is a safety net, not the normal case.
+  // Weak launches now correctly return the same ball.
+  for (let i = 0; i < 150; i++) {
     const st = await page.evaluate(() => ({ state: window.__pinball.game.state, balls: window.__pinball.game.balls }));
     if (st.state === 'GAME_OVER' || st.balls <= 0) break;
     await page.evaluate(async () => {

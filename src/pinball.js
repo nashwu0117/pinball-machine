@@ -92,6 +92,9 @@ export const BallMethods = {
     this.scene.add(mesh);
     /** Scratch quaternion for syncBall. */
     this._ballQuat = new THREE.Quaternion();
+    /** Scratch pose/spin for the interpolated sync in `syncBall`. */
+    this._ballPose = new CANNON.Vec3();
+    this._ballSpin = new CANNON.Quaternion();
 
     const body = new CANNON.Body({
       mass: BALL.mass,
@@ -172,11 +175,28 @@ export const BallMethods = {
    * position goes through the group's world matrix and the spin quaternion is
    * pre-multiplied by the board rotation. Rolling then looks correct on the
    * sloped board instead of spinning around a horizontal axis.
+   *
+   * @param {number} [alpha] how far into the newest fixed slice the world has
+   *   been simulated (0..1). The scheduler leaves the pre-slice pose in
+   *   `previousPosition` / `previousQuaternion`, so blending toward the current
+   *   pose keeps a frame that deferred physics visually smooth. `1` (the
+   *   default) snaps straight to the simulated pose.
    */
-  syncBall() {
+  syncBall(alpha = 1) {
     const b = this.ballBody;
-    this.ballMesh.position.copy(b.position).applyMatrix4(this.group.matrixWorld);
-    this._ballQuat.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+    const pose = this._ballPose;
+    const spin = this._ballSpin;
+
+    if (alpha < 1) {
+      b.previousPosition.lerp(b.position, alpha, pose);
+      b.previousQuaternion.slerp(b.quaternion, alpha, spin);
+    } else {
+      pose.copy(b.position);
+      spin.copy(b.quaternion);
+    }
+
+    this.ballMesh.position.set(pose.x, pose.y, pose.z).applyMatrix4(this.group.matrixWorld);
+    this._ballQuat.set(spin.x, spin.y, spin.z, spin.w);
     this.ballMesh.quaternion.copy(this._ballQuat).premultiply(this._boardQuat);
   },
 
@@ -231,15 +251,17 @@ export const DisplayMethods = {
   /**
    * Advance the machine's presentation to match the physics.
    * @param {number} dt seconds
+   * @param {number} [alpha] interpolation factor between the last two fixed
+   *   slices (0..1); passed straight through to `syncBall`.
    */
-  update(dt) {
+  update(dt, alpha = 1) {
     if (this.ballActive) {
       // Belt-and-braces speed clamp. The fixed timestep already prevents
       // tunnelling; this additionally keeps a bumper kick from punching the
       // ball through the ceiling collider.
       clampSpeed(this.ballBody, BALL.maxSpeed);
       this._guardBallInsideWalls();
-      this.syncBall();
+      this.syncBall(alpha);
     }
     this.ballMesh.visible = this.ballActive;
 
@@ -280,27 +302,46 @@ export const DisplayMethods = {
     const xLimit = BOARD.width / 2 - BOARD.wallThickness - BALL.radius;
     const zMin = BOARD.wallThickness + BALL.radius;
     const zMax = BOARD.height - BOARD.wallThickness - BALL.radius;
+
     let corrected = false;
 
+    // Guard X — clamp to playfield walls, reflect velocity
     if (body.position.x < -xLimit) {
       body.position.x = -xLimit;
-      if (body.velocity.x < 0) body.velocity.x = Math.abs(body.velocity.x) * 0.42;
+      body.velocity.x = Math.max(-BALL.maxSpeed, Math.min(BALL.maxSpeed, body.velocity.x)) * 0.42;
       corrected = true;
     } else if (body.position.x > xLimit) {
       body.position.x = xLimit;
-      if (body.velocity.x > 0) body.velocity.x = -Math.abs(body.velocity.x) * 0.42;
+      body.velocity.x = Math.max(-BALL.maxSpeed, Math.min(BALL.maxSpeed, body.velocity.x)) * -0.42;
       corrected = true;
     }
+
+    // Guard Z — clamp to front/back walls, reflect velocity
     if (body.position.z < zMin) {
       body.position.z = zMin;
-      if (body.velocity.z < 0) body.velocity.z = Math.abs(body.velocity.z) * 0.42;
+      body.velocity.z = Math.max(-BALL.maxSpeed, Math.min(BALL.maxSpeed, body.velocity.z)) * 0.42;
       corrected = true;
     } else if (body.position.z > zMax) {
       body.position.z = zMax;
-      if (body.velocity.z > 0) body.velocity.z = -Math.abs(body.velocity.z) * 0.42;
+      body.velocity.z = Math.max(-BALL.maxSpeed, Math.min(BALL.maxSpeed, body.velocity.z)) * -0.42;
       corrected = true;
     }
+
+    // Always wake the body if we corrected position — this prevents a sleeping
+    // ball from silently ignoring future wall collisions.
     if (corrected) body.wakeUp();
+
+    // Hard invalid-value guard: if position or velocity became NaN/Inf, reset
+    // to a safe default so the simulation never gets stuck in a broken state.
+    if (
+      !isFinite(body.position.x) || !isFinite(body.position.y) || !isFinite(body.position.z) ||
+      !isFinite(body.velocity.x) || !isFinite(body.velocity.y) || !isFinite(body.velocity.z)
+    ) {
+      body.position.set(0, 2, BOARD.height / 2);
+      body.velocity.set(0, 0, 0);
+      body.angularVelocity.set(0, 0, 0);
+      body.wakeUp();
+    }
   },
 
   /** Flash a bumper post white-hot for a moment when it is struck. */

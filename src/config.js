@@ -44,14 +44,50 @@ export const BALL = {
   /** A ball slower than this for this many seconds is considered stuck. */
   stuckSpeed: 6,
   stuckTime: 3.0,
+  /** Extra distance beyond wall guards before position is considered truly out-of-bounds. */
+  outOfBoundsExtra: 5.0,
+  /** Time (s) a ball may survive on the board before the shot is forced to finish. */
+  maxSurvivalTime: 12.0,
+  /** Time (s) a ball may remain nearly stationary (below stuckSpeed) before recovery. */
+  stuckTimeout: 5.0,
+  /** Time (s) a ball may remain in continuous overlap before being relocated. */
+  continuousOverlapTime: 4.0,
 };
 
-/** Physics stepping. */
+/** Physics stepping and the per-frame simulation budget. */
 export const PHYSICS = {
+  /** Fixed simulation slice (s). 240 Hz keeps a 430 cm/s ball under 2 cm/slice. */
   fixedStep: 1 / 240,
+  /** Hard cap on catch-up slices per rendered frame (spiral-of-death guard). */
   maxSubSteps: 24,
+  /** Solver precision while the machine runs comfortably. */
   solverIterations: 18,
   solverTolerance: 0.0015,
+  /**
+   * Wall-clock budget (ms) the physics scheduler may spend per frame. Slices it
+   * cannot finish stay in the accumulator for the next frame, so requestAnim-
+   * ationFrame rendering and input handling always get the rest of the frame.
+   * `Infinity` disables the budget (deterministic offline simulation).
+   */
+  budgetMs: 6,
+  /**
+   * Largest delta (s) fed into the accumulator in one frame. A tab that was
+   * backgrounded for seconds must not fast-forward the ball, so the excess is
+   * dropped rather than replayed. Equals `fixedStep * maxSubSteps`.
+   */
+  maxFrameDelta: 0.1,
+  /** Reduced-precision solver used when crowded or falling behind. */
+  reducedSolverIterations: 8,
+  reducedSolverTolerance: 0.004,
+  /** Dynamic bodies at which precision is reduced (covers multi-ball play). */
+  crowdThreshold: 6,
+  /**
+   * Average physics cost (ms/frame) above which precision is reduced before the
+   * wall-clock budget is actually exhausted. Defaults to 80% of `budgetMs`.
+   */
+  slowCostMs: 4.8,
+  /** How long (ms) to stay at reduced precision after falling behind. */
+  degradedHoldMs: 900,
 };
 
 /**
@@ -83,16 +119,6 @@ export const POCKET = {
   dividerThickness: 0.34,
   /** Height of the pocket dividers, measured from the board floor. */
   dividerHeight: 2.8,
-};
-
-/** The 2 and 10 pockets sit under a small arch so pachinko-style sitters can drain out. */
-export const POCKET_ARCH = {
-  /** Side pockets that get an arch above them. */
-  values: [],
-  /** Clearance from the board floor to the underside of the arch. */
-  clearance: 5.2,
-  /** Length of the arch along z. */
-  length: 7.0,
 };
 
 /** Number of balls the player starts with. */

@@ -33,6 +33,9 @@ await page.setViewport({ width: 1280, height: 800 });
 await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForFunction('window.__pinball !== undefined', { timeout: 90000 });
 await new Promise((resolve) => setTimeout(resolve, 700));
+// Keep the browser's live render loop from competing with deterministic UI
+// actions below; game.update() is driven explicitly by this smoke test.
+await page.evaluate(() => { window.__pinballTestDrive = true; });
 
 check('welcome teaches the rules on first load', await isVisible('#welcome:not(.hidden)'));
 check('base score readout exists', await isVisible('#hud-base'));
@@ -75,6 +78,7 @@ await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true
 await page.reload({ waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__pinball !== undefined', { timeout: 90000 });
 await new Promise((resolve) => setTimeout(resolve, 700));
+await page.evaluate(() => { window.__pinballTestDrive = true; });
 check('mobile controls appear on a phone viewport', await isVisible('#mobile-controls'));
 check('desktop help ribbon hides on a phone viewport', !(await isVisible('#how-to')));
 await page.screenshot({ path: 'test/screen-mobile.png' });

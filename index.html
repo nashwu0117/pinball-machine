@@ -46,10 +46,11 @@
           <span id="hud-base" class="value">20</span>
         </div>
         <div class="readout score-readout">
-          <span class="label">SCORE</span>
+          <span class="label">SCORE*</span>
           <span id="hud-score" class="value">0</span>
         </div>
       </div>
+      <p class="score-note">*瀏覽器設計抽象；實機贏回彈珠</p>
       <div class="status-row">
         <p id="hud-status" class="status" aria-live="polite">按「開始」抽目標</p>
       </div>
@@ -88,10 +89,10 @@
 
     <div id="welcome" class="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
       <div class="welcome-card">
-        <div class="ticket-stub">每局 10 顆</div>
+        <div class="ticket-stub">每局 <span id="welcome-balls">10</span> 顆</div>
         <p class="welcome-kicker">正宗台味・全物理鋼珠</p>
         <h2 id="welcome-title">彈珠超人</h2>
-        <p class="welcome-copy">每次發射 1 顆彈珠，落入倍率洞就獲得分數。<br>先選基礎分數與本局彈珠數量！</p>
+        <p class="welcome-copy">每次發射 1 顆彈珠，落入倍率洞會獲得瀏覽器設計抽象的分數；實機則是命中指定紅燈球道贏回彈珠。<br>先選基礎分數與本局顆數！</p>
         <div class="setup-controls">
           <div><span>基礎分數</span><div class="choice-row" id="base-score-choices">
             <button type="button" data-base-score="10">10</button>

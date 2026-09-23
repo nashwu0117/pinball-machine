@@ -13,6 +13,10 @@ page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 await page.goto('file:///home/nash/workspace/pinball-machine/game.html', { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForFunction('window.__pinball !== undefined', { timeout: 90000 });
 await new Promise(r => setTimeout(r, 1500));
+// Manual game updates below own the simulation clock. Pause the live render
+// loop so it cannot compete with the deterministic physics checks in a slow
+// headless browser (the loop still pumps requestAnimationFrame callbacks).
+await page.evaluate(() => { window.__pinballTestDrive = true; });
 
 // boot + structure
 const boot = await page.evaluate(() => {

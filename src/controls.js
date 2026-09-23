@@ -212,7 +212,7 @@ export class Controls {
     audio.unlock();
     this.orbit?.noteInteraction();
     // Walk keys: held keys pan the camera every frame via `update`.
-    if (this.orbit && ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'].includes(event.code)) {
+    if (this.orbit && ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'].includes(event.code)) {
       this._walk[event.code] = true;
       if (event.code.startsWith('Arrow')) event.preventDefault();
       return; // fall through: these are not game shortcuts
@@ -221,7 +221,9 @@ export class Controls {
       case 'Space': {
         event.preventDefault();
         if (event.repeat) break;
-        if (this.game.state === 'READY' || this.game.state === 'GAME_OVER') {
+        if (this.game.state === 'SPINNING') {
+          this.game.stopSpin();
+        } else if (this.game.state === 'READY' || this.game.state === 'GAME_OVER') {
           this.game.pressStart();
         } else if (this.game.state === 'AIMING') {
           this.spaceHeld = true;
@@ -238,8 +240,17 @@ export class Controls {
       case 'KeyR':
         this.game.reset();
         break;
+      case 'KeyV': {
+        // Toggle the free-look rig; the orbit confirms the resulting mode.
+        if (!this.orbit) break;
+        const free = this.orbit.setFreeMode(!this.orbit.free);
+        this.game.ui?.setCameraMode?.(free);
+        break;
+      }
       case 'Enter':
-        if (this.game.state === 'AIMING') {
+        if (this.game.state === 'SPINNING') {
+          this.game.stopSpin();
+        } else if (this.game.state === 'AIMING') {
           const pull = PLUNGER.maxPull * 0.65;
           this.machine.updatePlungerVisual(pull);
           this.game.releasePlunger(pull);
@@ -274,12 +285,14 @@ export class Controls {
    * @param {number} dt
    */
   update(dt) {
-    // Camera walking: WASD / arrow keys pan the orbit target.
+    // Camera walking: WASD / arrow keys pan the orbit target; in free mode
+    // Q/E also sink/rise so the player can fly around the cabinet.
     if (this.orbit) {
       const w = this._walk;
       const forward = (w.KeyW || w.ArrowUp ? 1 : 0) + (w.KeyS || w.ArrowDown ? -1 : 0);
       const strafe = (w.KeyD || w.ArrowRight ? 1 : 0) + (w.KeyA || w.ArrowLeft ? -1 : 0);
-      if (forward !== 0 || strafe !== 0) this.orbit.pan(forward, strafe, dt);
+      const up = (this.orbit.free && w.KeyE ? 1 : 0) + (this.orbit.free && w.KeyQ ? -1 : 0);
+      if (forward !== 0 || strafe !== 0 || up !== 0) this.orbit.pan(forward, strafe, dt, up);
     }
 
     if (this.spaceHeld && this.game.state === 'AIMING') {

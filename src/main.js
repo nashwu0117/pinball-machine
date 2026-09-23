@@ -12,6 +12,7 @@ import { Controls } from './controls.js';
 import { OrbitCamera } from './camera.js';
 import { UI } from './ui.js';
 import { audio } from './audio.js';
+import { CANNON } from './physics.js';
 
 const canvas = document.getElementById('scene');
 
@@ -117,22 +118,28 @@ function frame() {
     return;
   }
 
-  // Cap the delta so a backgrounded tab does not fast-forward the physics.
-  const dt = Math.min(clock.getDelta(), 0.05);
+  // The simulation owns its own delta policy: `game.update()` feeds a
+  // fixed-timestep accumulator with a per-frame wall-clock budget (src/loop.js),
+  // so a slow frame defers physics instead of blocking the render. Presentation
+  // consumers still get a small clamp so a backgrounded tab cannot jump the
+  // camera or the HUD.
+  const rawDt = clock.getDelta();
+  const presentDt = Math.min(rawDt, 0.05);
 
-  game.update(dt);
-  controls.update(dt);
-  ui.update(dt);
+  game.update(rawDt);
+  controls.update(presentDt);
+  ui.update(presentDt);
 
   // Park the showcase while a round is live, and slide back to the standard
   // framing whenever a new ball is loaded so aiming starts from a known view.
+  // In free mode the player owns the camera, so nothing snaps it back.
   orbit.suspendShowcase = game.state !== 'READY' && game.state !== 'GAME_OVER';
-  if (game.state === 'AIMING' && lastGameState !== 'AIMING') orbit.returnToDefault();
+  if (!orbit.free && game.state === 'AIMING' && lastGameState !== 'AIMING') orbit.returnToDefault();
   lastGameState = game.state;
 
   // Ease the orbit rig toward the player's drag/zoom, then let the very
   // slight impact shake ride on top of whatever framing was chosen.
-  orbit.update(dt);
+  orbit.update(presentDt);
   const camPos = orbit.position;
   const camLook = orbit.lookAt;
   camera.position.set(
@@ -171,4 +178,4 @@ ui.setMuted(audio.muted);
 frame();
 
 // Expose a tiny handle for debugging / automated tests in the console.
-window.__pinball = { machine, game, controls, ui, audio, camera, orbit, scene, renderer, THREE, TILT };
+window.__pinball = { machine, game, controls, ui, audio, camera, orbit, scene, renderer, THREE, CANNON, TILT, stepper: game.stepper };

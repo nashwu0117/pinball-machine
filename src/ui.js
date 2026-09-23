@@ -38,6 +38,7 @@ export class UI {
       mute: document.getElementById('mute'),
       loading: document.getElementById('loading'),
       welcome: document.getElementById('welcome'),
+      welcomeBalls: document.getElementById('welcome-balls'),
       welcomeStart: document.getElementById('welcome-start'),
       touchPower: document.getElementById('touch-power'),
       touchPowerValue: document.getElementById('touch-power-value'),
@@ -183,6 +184,13 @@ export class UI {
 
     if (this.el.balls) this.el.balls.textContent = String(game.balls);
     if (this.el.base) this.el.base.textContent = String(game.baseScore ?? 20);
+    if (this.el.welcomeBalls) this.el.welcomeBalls.textContent = String(game.batchSize ?? 10);
+    document.querySelectorAll('[data-base-score]').forEach((button) => {
+      button.classList.toggle('selected', Number(button.dataset.baseScore) === game.baseScore);
+    });
+    document.querySelectorAll('[data-batch-size]').forEach((button) => {
+      button.classList.toggle('selected', Number(button.dataset.batchSize) === game.batchSize);
+    });
     this.renderScore(game);
     this.renderHistory(game);
     this.renderStats(game);
@@ -230,7 +238,10 @@ export class UI {
       case 'AIMING': return `基礎 ${game.baseScore} 分 — 往下拉右下角彈簧發射`;
       case 'IN_PLAY': return '鋼珠穿越釘陣中…';
       case 'RESOLVING':
-        return game.pendingResult?.type === 'score' ? `進入 ×${game.pendingResult.value} 洞！` : '彈珠未進洞，再來一球';
+        if (game.pendingResult?.type !== 'score') return '彈珠未進洞，再來一球';
+        return game.pendingResult.hitTarget
+          ? `命中指定球道！贏得 ${game.pendingResult.reward} 顆彈珠`
+          : `進入 ×${game.pendingResult.value} 洞！`;
       case 'GAME_OVER': return '本張票券已結算';
       default: return '';
     }
@@ -238,7 +249,7 @@ export class UI {
 
   _hintText(game) {
     switch (game.state) {
-      case 'READY': return '每局共 10 顆，逐顆投入；SPACE 或點白色按鈕開始跳燈';
+      case 'READY': return '每局共 ' + (game.batchSize ?? 10) + ' 顆，逐顆投入；SPACE 或點白色按鈕開始跳燈';
       case 'AIMING': return '將拉桿往下拉出蓄力、放開發射；力道不足會退回原位';
       default: return '';
     }
@@ -251,11 +262,11 @@ export class UI {
   flashResult(result) {
     const el = this.el.flash;
     if (!el) return;
-    if (result.type === 'score') el.textContent = `×${result.value}！  +${result.points} 分`;
-    else if (result.type === 'miss') el.textContent = `落入第 ${result.lane + 1} 道`;
+    if (result.type === 'score' && result.hitTarget) el.textContent = `命中指定球道！+${result.reward} 顆彈珠 ・ +${result.points} 分`;
+    else if (result.type === 'score') el.textContent = `×${result.value}！  +${result.points} 分`;
     else if (result.type === 'retry') el.textContent = '力道不足・再拉一次';
     else el.textContent = '未進球槽';
-    el.dataset.type = result.type === 'score' ? (result.value >= 10 ? 'jackpot' : 'score') : result.type;
+    el.dataset.type = result.type === 'score' ? (result.hitTarget ? 'jackpot' : (result.value >= 10 ? 'jackpot' : 'score')) : result.type;
     el.classList.add('visible');
     this._flashTimer = 1.15;
   }
@@ -268,6 +279,8 @@ export class UI {
       this.el.summary.innerHTML = [
         `本局發射：<b>${game.shots}</b> 顆`,
         `成功命中：<b>${game.hits}</b> 次`,
+        `命中指定球道：<b>${game.targetHits ?? 0}</b> 次`,
+        `贏回球數：<b>${game.ballsWon ?? 0}</b> 顆`,
         `本局總分：<b>${game.score}</b>`,
         `最高單次：<b>${game.highestShot}</b>`,
       ].join('<br>');

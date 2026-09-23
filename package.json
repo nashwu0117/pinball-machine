@@ -9,6 +9,9 @@
     "test": "node test/run.js",
     "test:ux": "node test/ux-check.js",
     "test:offline": "node test/offline-check.js",
+    "test:timestep": "node test/timestep.js",
+    "test:game-logic": "node test/game-logic.js",
+    "test:loop": "node test/timestep-check.js",
     "serve": "node serve.mjs 8181",
     "build": "node build-singlefile.mjs"
   },
