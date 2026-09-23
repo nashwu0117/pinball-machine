@@ -449,6 +449,7 @@ html, body {
   text-shadow: 2px 3px 0 #fff, 4px 6px 0 #f4b91e;
 }
 .welcome-copy { margin: 18px 0; color: #493225; font-size: 15px; font-weight: 650; line-height: 1.75; }
+.welcome-copy strong { color: var(--red-deep); }
 .rule-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 20px; }
 .rule-strip span { padding: 9px 4px; border: 1px dashed rgba(167, 24, 32, .42); border-radius: 8px; font-size: 12px; }
 .rule-strip strong { display: block; color: var(--red-deep); font-size: 21px; }
@@ -690,19 +691,19 @@ kbd {
       <h1>B.B.MAN 彈珠超人</h1>
       <div class="readouts">
         <div class="readout">
-          <span class="label">BALLS</span>
+          <span class="label">彈珠 BALLS</span>
           <span id="hud-balls" class="value">10</span>
         </div>
         <div class="readout">
-          <span class="label">BASE</span>
+          <span class="label">抽象 BASE</span>
           <span id="hud-base" class="value">20</span>
         </div>
         <div class="readout score-readout">
-          <span class="label">SCORE*</span>
+          <span class="label">SCORE* 抽象</span>
           <span id="hud-score" class="value">0</span>
         </div>
       </div>
-      <p class="score-note">*瀏覽器設計抽象；實機贏回彈珠</p>
+      <p class="score-note">*僅供瀏覽器比較；實機只看命中後贏回的彈珠顆數</p>
       <div class="status-row">
         <p id="hud-status" class="status" aria-live="polite">按「開始」抽目標</p>
       </div>
@@ -744,15 +745,15 @@ kbd {
         <div class="ticket-stub">每局 <span id="welcome-balls">10</span> 顆</div>
         <p class="welcome-kicker">正宗台味・全物理鋼珠</p>
         <h2 id="welcome-title">彈珠超人</h2>
-        <p class="welcome-copy">每次發射 1 顆彈珠，落入倍率洞會獲得瀏覽器設計抽象的分數；實機則是命中指定紅燈球道贏回彈珠。<br>先選基礎分數與本局顆數！</p>
+        <p class="welcome-copy"><strong>實機基準：每局 10 顆，一次投入 1 顆。</strong><br>紅燈跳動後按開始鎖定 2／4／6／8／10；拉桿發射，命中指定紅燈球道才贏回對應顆數。<br>下方分數與倍率洞是瀏覽器限定的遊戲設計抽象。</p>
         <div class="setup-controls">
-          <div><span>基礎分數</span><div class="choice-row" id="base-score-choices">
+          <div><span>瀏覽器分數抽象（非實機）</span><div class="choice-row" id="base-score-choices">
             <button type="button" data-base-score="10">10</button>
             <button type="button" data-base-score="20" class="selected">20</button>
             <button type="button" data-base-score="50">50</button>
             <button type="button" data-base-score="100">100</button>
           </div></div>
-          <div><span>本局顆數</span><div class="choice-row" id="batch-size-choices">
+          <div><span>瀏覽器練習顆數（實機基準 10）</span><div class="choice-row" id="batch-size-choices">
             <button type="button" data-batch-size="5">5</button>
             <button type="button" data-batch-size="10" class="selected">10</button>
             <button type="button" data-batch-size="20">20</button>
@@ -763,8 +764,8 @@ kbd {
           <span><strong>拉</strong> 彈簧</span>
           <span><strong>中</strong> 紅燈</span>
         </div>
-        <button id="welcome-start" type="button">投幣開打</button>
-        <p class="welcome-small">支援滑鼠、觸控與鍵盤 SPACE</p>
+        <button id="welcome-start" type="button">開始本局</button>
+        <p class="welcome-small">10 顆是實機基準；5／20 顆只供瀏覽器測試。支援滑鼠、觸控與鍵盤 SPACE</p>
       </div>
     </div>
 
@@ -44679,12 +44680,12 @@ var UI = class {
       case "SPINNING":
         return "\u7D05\u71C8\u7403\u9053\u8207\u734E\u52F5\u9846\u6578\u8DF3\u52D5\u4E2D\u30FB\u518D\u6309\u4E00\u6B21\u505C\u6B62";
       case "AIMING":
-        return `\u57FA\u790E ${game2.baseScore} \u5206 \u2014 \u5F80\u4E0B\u62C9\u53F3\u4E0B\u89D2\u5F48\u7C27\u767C\u5C04`;
+        return `\u700F\u89BD\u5668\u62BD\u8C61\u57FA\u790E ${game2.baseScore} \u5206 \u2014 \u5F80\u4E0B\u62C9\u53F3\u4E0B\u89D2\u5F48\u7C27\u767C\u5C04`;
       case "IN_PLAY":
         return "\u92FC\u73E0\u7A7F\u8D8A\u91D8\u9663\u4E2D\u2026";
       case "RESOLVING":
         if (game2.pendingResult?.type !== "score") return "\u5F48\u73E0\u672A\u9032\u6D1E\uFF0C\u518D\u4F86\u4E00\u7403";
-        return game2.pendingResult.hitTarget ? `\u547D\u4E2D\u6307\u5B9A\u7403\u9053\uFF01\u8D0F\u5F97 ${game2.pendingResult.reward} \u9846\u5F48\u73E0` : `\u9032\u5165 \xD7${game2.pendingResult.value} \u6D1E\uFF01`;
+        return game2.pendingResult.hitTarget ? `\u547D\u4E2D\u6307\u5B9A\u7403\u9053\uFF01\u8D0F\u5F97 ${game2.pendingResult.reward} \u9846\u5F48\u73E0` : `\u700F\u89BD\u5668\u62BD\u8C61\uFF1A\u9032\u5165 \xD7${game2.pendingResult.value} \u6D1E\uFF01`;
       case "GAME_OVER":
         return "\u672C\u5F35\u7968\u5238\u5DF2\u7D50\u7B97";
       default:
@@ -44694,7 +44695,7 @@ var UI = class {
   _hintText(game2) {
     switch (game2.state) {
       case "READY":
-        return "\u6BCF\u5C40\u5171 " + (game2.batchSize ?? 10) + " \u9846\uFF0C\u9010\u9846\u6295\u5165\uFF1BSPACE \u6216\u9EDE\u767D\u8272\u6309\u9215\u958B\u59CB\u8DF3\u71C8";
+        return `\u6BCF\u6B21\u6295\u5165 1 \u9846\uFF1B\u5BE6\u6A5F\u57FA\u6E96 10 \u9846\uFF08\u76EE\u524D\u700F\u89BD\u5668 ${game2.batchSize ?? 10} \u9846\uFF09\uFF1BSPACE \u6216\u9EDE\u767D\u8272\u6309\u9215\u958B\u59CB\u8DF3\u71C8`;
       case "AIMING":
         return "\u5C07\u62C9\u687F\u5F80\u4E0B\u62C9\u51FA\u84C4\u529B\u3001\u653E\u958B\u767C\u5C04\uFF1B\u529B\u9053\u4E0D\u8DB3\u6703\u9000\u56DE\u539F\u4F4D";
       default:
@@ -44708,8 +44709,8 @@ var UI = class {
   flashResult(result) {
     const el = this.el.flash;
     if (!el) return;
-    if (result.type === "score" && result.hitTarget) el.textContent = `\u547D\u4E2D\u6307\u5B9A\u7403\u9053\uFF01+${result.reward} \u9846\u5F48\u73E0 \u30FB +${result.points} \u5206`;
-    else if (result.type === "score") el.textContent = `\xD7${result.value}\uFF01  +${result.points} \u5206`;
+    if (result.type === "score" && result.hitTarget) el.textContent = `\u547D\u4E2D\u6307\u5B9A\u7403\u9053\uFF01+${result.reward} \u9846\u5F48\u73E0 \u30FB \u62BD\u8C61 +${result.points} \u5206`;
+    else if (result.type === "score") el.textContent = `\u62BD\u8C61 \xD7${result.value}\uFF01  +${result.points} \u5206`;
     else if (result.type === "retry") el.textContent = "\u529B\u9053\u4E0D\u8DB3\u30FB\u518D\u62C9\u4E00\u6B21";
     else el.textContent = "\u672A\u9032\u7403\u69FD";
     el.dataset.type = result.type === "score" ? result.hitTarget ? "jackpot" : result.value >= 10 ? "jackpot" : "score" : result.type;
@@ -44726,8 +44727,8 @@ var UI = class {
         `\u6210\u529F\u547D\u4E2D\uFF1A<b>${game2.hits}</b> \u6B21`,
         `\u547D\u4E2D\u6307\u5B9A\u7403\u9053\uFF1A<b>${game2.targetHits ?? 0}</b> \u6B21`,
         `\u8D0F\u56DE\u7403\u6578\uFF1A<b>${game2.ballsWon ?? 0}</b> \u9846`,
-        `\u672C\u5C40\u7E3D\u5206\uFF1A<b>${game2.score}</b>`,
-        `\u6700\u9AD8\u55AE\u6B21\uFF1A<b>${game2.highestShot}</b>`
+        `\u672C\u5C40\u7E3D\u5206\uFF08\u700F\u89BD\u5668\u62BD\u8C61\uFF09\uFF1A<b>${game2.score}</b>`,
+        `\u6700\u9AD8\u55AE\u6B21\uFF08\u700F\u89BD\u5668\u62BD\u8C61\uFF09\uFF1A<b>${game2.highestShot}</b>`
       ].join("<br>");
     }
   }
@@ -44740,7 +44741,7 @@ var UI = class {
   renderStats(game2) {
     if (!this.el.stats) return;
     const counts = Object.entries(game2.multiplierStats ?? {}).map(([m, n]) => `\xD7${m}:${n}`).join("  ");
-    this.el.stats.innerHTML = `<b>\u7D71\u8A08</b><br>\u767C\u5C04 ${game2.shots ?? 0} \u7403 \u30FB \u6700\u9AD8 ${game2.highestShot ?? 0} \u5206<br>${counts}`;
+    this.el.stats.innerHTML = `<b>\u7D71\u8A08\uFF08\u5206\u6578\u70BA\u700F\u89BD\u5668\u62BD\u8C61\uFF09</b><br>\u767C\u5C04 ${game2.shots ?? 0} \u7403 \u30FB \u6700\u9AD8 ${game2.highestShot ?? 0} \u5206<br>${counts}`;
   }
   hideGameOver() {
     this.el.gameOver?.classList.remove("visible");

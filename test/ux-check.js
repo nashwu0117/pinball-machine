@@ -38,6 +38,9 @@ await new Promise((resolve) => setTimeout(resolve, 700));
 await page.evaluate(() => { window.__pinballTestDrive = true; });
 
 check('welcome teaches the rules on first load', await isVisible('#welcome:not(.hidden)'));
+const welcomeCopy = await page.$eval('.welcome-copy', (element) => element.textContent);
+check('welcome states the real-machine ten-ball rule', welcomeCopy.includes('實機基準：每局 10 顆'));
+check('welcome labels the score system as browser-only abstraction', welcomeCopy.includes('瀏覽器限定') && welcomeCopy.includes('設計抽象'));
 check('base score readout exists', await isVisible('#hud-base'));
 check('three-step rule ribbon exists', await isVisible('#how-to'));
 await page.screenshot({ path: 'test/screen-welcome.png' });

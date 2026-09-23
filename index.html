@@ -38,19 +38,19 @@
       <h1>B.B.MAN 彈珠超人</h1>
       <div class="readouts">
         <div class="readout">
-          <span class="label">BALLS</span>
+          <span class="label">彈珠 BALLS</span>
           <span id="hud-balls" class="value">10</span>
         </div>
         <div class="readout">
-          <span class="label">BASE</span>
+          <span class="label">抽象 BASE</span>
           <span id="hud-base" class="value">20</span>
         </div>
         <div class="readout score-readout">
-          <span class="label">SCORE*</span>
+          <span class="label">SCORE* 抽象</span>
           <span id="hud-score" class="value">0</span>
         </div>
       </div>
-      <p class="score-note">*瀏覽器設計抽象；實機贏回彈珠</p>
+      <p class="score-note">*僅供瀏覽器比較；實機只看命中後贏回的彈珠顆數</p>
       <div class="status-row">
         <p id="hud-status" class="status" aria-live="polite">按「開始」抽目標</p>
       </div>
@@ -92,15 +92,15 @@
         <div class="ticket-stub">每局 <span id="welcome-balls">10</span> 顆</div>
         <p class="welcome-kicker">正宗台味・全物理鋼珠</p>
         <h2 id="welcome-title">彈珠超人</h2>
-        <p class="welcome-copy">每次發射 1 顆彈珠，落入倍率洞會獲得瀏覽器設計抽象的分數；實機則是命中指定紅燈球道贏回彈珠。<br>先選基礎分數與本局顆數！</p>
+        <p class="welcome-copy"><strong>實機基準：每局 10 顆，一次投入 1 顆。</strong><br>紅燈跳動後按開始鎖定 2／4／6／8／10；拉桿發射，命中指定紅燈球道才贏回對應顆數。<br>下方分數與倍率洞是瀏覽器限定的遊戲設計抽象。</p>
         <div class="setup-controls">
-          <div><span>基礎分數</span><div class="choice-row" id="base-score-choices">
+          <div><span>瀏覽器分數抽象（非實機）</span><div class="choice-row" id="base-score-choices">
             <button type="button" data-base-score="10">10</button>
             <button type="button" data-base-score="20" class="selected">20</button>
             <button type="button" data-base-score="50">50</button>
             <button type="button" data-base-score="100">100</button>
           </div></div>
-          <div><span>本局顆數</span><div class="choice-row" id="batch-size-choices">
+          <div><span>瀏覽器練習顆數（實機基準 10）</span><div class="choice-row" id="batch-size-choices">
             <button type="button" data-batch-size="5">5</button>
             <button type="button" data-batch-size="10" class="selected">10</button>
             <button type="button" data-batch-size="20">20</button>
@@ -111,8 +111,8 @@
           <span><strong>拉</strong> 彈簧</span>
           <span><strong>中</strong> 紅燈</span>
         </div>
-        <button id="welcome-start" type="button">投幣開打</button>
-        <p class="welcome-small">支援滑鼠、觸控與鍵盤 SPACE</p>
+        <button id="welcome-start" type="button">開始本局</button>
+        <p class="welcome-small">10 顆是實機基準；5／20 顆只供瀏覽器測試。支援滑鼠、觸控與鍵盤 SPACE</p>
       </div>
     </div>
 

@@ -440,6 +440,7 @@ html, body {
   text-shadow: 2px 3px 0 #fff, 4px 6px 0 #f4b91e;
 }
 .welcome-copy { margin: 18px 0; color: #493225; font-size: 15px; font-weight: 650; line-height: 1.75; }
+.welcome-copy strong { color: var(--red-deep); }
 .rule-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 20px; }
 .rule-strip span { padding: 9px 4px; border: 1px dashed rgba(167, 24, 32, .42); border-radius: 8px; font-size: 12px; }
 .rule-strip strong { display: block; color: var(--red-deep); font-size: 21px; }
